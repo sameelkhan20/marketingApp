@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from . import settings_store, usage
 from . import llm
-from .config import PKR_PER_USD
+from . import fx
 from .db import AccountStat, Alert, Launch, Plan, PlanOutcome, get_session
 from .seasonality import events
 
@@ -131,6 +131,6 @@ def build() -> dict:
         "date": today.isoformat(),
         "items": items[:12],
         "stats": {"campaigns": len(running), "orders": orders, "spend_usd": round(spend, 2),
-                  "spend_pkr": round(spend * PKR_PER_USD), "cpa_usd": round(spend / orders, 2) if orders else None,
+                  "spend_pkr": round(spend * fx.pkr_per_usd()), "cpa_usd": round(spend / orders, 2) if orders else None,
                   "open_alerts": len(open_alerts)},
     }

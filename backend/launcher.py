@@ -12,7 +12,7 @@ and say so. Ads are skipped (not failed) when no page or image is configured.
 import re
 import time
 
-from .config import PKR_PER_USD
+from . import fx
 from .meta_client import MetaClient, MetaError, budget_minor_units
 from .settings_store import ad_account_path
 
@@ -73,8 +73,11 @@ def ensure_audiences(client, act: str, pixel: str, cached: dict) -> tuple[dict, 
         if have.get(k) and hasattr(client, "get"):
             try:
                 client.get(have[k], fields="id")
-            except MetaError:
-                have[k] = ""
+            except MetaError as ex:
+                msg = str(ex).lower()
+                if "does not exist" in msg or "error (100)" in msg or "unsupported get request" in msg:
+                    have[k] = ""  # deleted in Ads Manager: make a new one
+                # anything else (network, rate limit): keep the id and try it
     if have.get("visitors") and have.get("buyers"):
         return {"pixel": pixel, "visitors": have["visitors"], "buyers": have["buyers"]}, ""
     def rule(days: int, flt: dict) -> dict:
@@ -118,6 +121,7 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
     # Budget: plan is in PKR; convert to the account currency.
     total_pkr = plan_inputs["budget_pkr"]
     days = max(plan_inputs["duration_days"], 1)
+    PKR_PER_USD = fx.pkr_per_usd()  # today's rate: the budget the owner set is in rupees
     if currency == "PKR":
         daily_total = total_pkr / days
     elif currency == "USD":
@@ -234,6 +238,7 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
         "campaign_id": campaign_id,
         "account": act,
         "currency": currency,
+        "pkr_per_usd": PKR_PER_USD,  # the rate this campaign was built with (guardrails keep using it)
         "adsets": adsets,
         "ads": ads,
         "notes": notes,

@@ -266,19 +266,18 @@ def _fit_days(phases: list[dict], total: int) -> None:
     if len(phases) > total:
         del phases[total:]
     have = sum(p["days"] for p in phases)
-    if have == total:
+    if have == total or not phases:
         return
     for p in phases:
         p["days"] = max(1, int(p["days"] * total / have)) if have else 1
     diff = total - sum(p["days"] for p in phases)
-    i = len(phases) - 1
-    while diff and i >= -len(phases) * 4:
-        p = phases[i % len(phases)]
-        if diff > 0:
-            p["days"] += 1; diff -= 1
-        elif p["days"] > 1:
-            p["days"] -= 1; diff += 1
-        i -= 1
+    if diff > 0:
+        max(phases, key=lambda p: p["days"])["days"] += diff
+    while diff < 0:  # take from the longest phase first; len(phases) <= total so this ends
+        p = max(phases, key=lambda p: p["days"])
+        step = min(p["days"] - 1, -diff)
+        p["days"] -= step
+        diff += step
 
 
 def normalize_plan(c: dict, duration_days: int | None = None) -> dict:

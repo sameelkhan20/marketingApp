@@ -19,7 +19,8 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "").lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 _raw_image_key = os.getenv("IMAGE_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or (_raw_image_key if _raw_image_key and not _raw_image_key.startswith("sk-") else "")  # Google keys: AIza... or AQ....
-PKR_PER_USD = float(os.getenv("PKR_PER_USD", "280"))
+PKR_PER_USD = float(os.getenv("PKR_PER_USD", "280"))  # fallback only: the live rate is used (backend/fx.py)
+FX_LIVE = os.getenv("FX_LIVE", "1").lower() not in ("0", "false", "no")
 
 META_APP_ID = os.getenv("META_APP_ID", "")
 META_APP_SECRET = os.getenv("META_APP_SECRET", "")

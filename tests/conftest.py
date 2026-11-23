@@ -20,6 +20,7 @@ os.environ["GMAIL_REFRESH_TOKEN"] = ""
 os.environ["BREVO_API_KEY"] = ""
 os.environ["META_APP_ID"] = ""
 os.environ["PKR_PER_USD"] = "280"
+os.environ["FX_LIVE"] = "0"  # no network in tests; test_fx switches it on with a fake feed
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest  # noqa: E402

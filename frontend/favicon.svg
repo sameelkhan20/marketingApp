@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Facon "F" mark (same vector as the Facon Product Hunt app) -->
+  <defs>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b6fb3"/>
+      <stop offset="1" stop-color="#45b6ea"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="12" fill="#ffffff"/>
+  <!-- blue frame: top-left corner, tapering along the top and down the left -->
+  <path d="M5 7 L44 7 L40 10.5 L10.5 10.5 L12.5 44 L8.5 49 Z" fill="url(#b)"/>
+  <!-- blue frame: bottom-right corner -->
+  <path d="M51 26 L54 23 L54 48 L29 48 L32.5 44.5 L51 44.5 Z" fill="url(#b)"/>
+  <!-- the F -->
+  <path d="M17 15 H47 V24 H29 V29.5 H43 V38 H29 V51 H17 Z" fill="#111111"/>
+  <!-- swoosh underline with the arrow tip -->
+  <path d="M12 57.5 C26 55.5 44 54 57 53 L53 45 L61 55.5 C44 57 27 58.5 12 59.8 Z" fill="#111111"/>
+</svg>

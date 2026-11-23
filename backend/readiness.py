@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from . import settings_store
 from .benchmarks import get_country
-from .config import PKR_PER_USD
+from . import fx
 from .db import Creative, Plan
 from .meta_client import MetaClient, MetaError
 from .settings_store import ad_account_path
@@ -71,7 +71,7 @@ def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
         cmin = get_country(plan.country)["min_daily_usd"]
     except KeyError:
         cmin = 5
-    daily_total = plan.budget_pkr / PKR_PER_USD / max(plan.duration_days, 1)
+    daily_total = plan.budget_pkr / fx.pkr_per_usd() / max(plan.duration_days, 1)  # launch uses today's rate
     low = [a["name"] for a in content.get("ad_sets", []) if daily_total * float(a.get("daily_budget_pct", 0)) / 100 < cmin]
     add("budget", not low, f"Daily budget ${daily_total:.2f} split across {len(content.get('ad_sets', []))} ad sets"
         if not low else f"Ad sets below Meta's ~${cmin}/day minimum: {', '.join(low)}. Raise the budget, shorten the duration or merge ad sets.")

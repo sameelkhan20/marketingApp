@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from .db import (ActionLog, ActionOutcome, Calibration, Launch, LearnedRule, MetricSnapshot, Plan, PlanOutcome)
 from .meta_sync import _purchases, to_usd
 
-from .config import PKR_PER_USD
+from . import fx
 log = logging.getLogger("outcomes")
 
 ACTION_EVAL_AFTER_DAYS = 7  # snapshots hold 7-day windows: wait a full window after the change
@@ -39,7 +39,7 @@ def update_plan_outcome(session: Session, launch: Launch, plan: Plan, lifetime: 
 
     expected = int(est.get("orders_expected", 0))
     raw = float((est.get("assumptions") or {}).get("orders_raw") or expected)
-    budget_usd = float(est.get("budget_usd") or plan.budget_pkr / PKR_PER_USD)
+    budget_usd = float(est.get("budget_usd") or plan.budget_pkr / fx.plan_rate(plan))
     day_frac = min(days_active / max(plan.duration_days, 1), 1.0)
     spend_frac = min(spend / budget_usd, 1.0) if budget_usd > 0 else day_frac
     frac = spend_frac if spend > 0 else day_frac
@@ -86,6 +86,9 @@ def complete_launch(session: Session, launch: Launch, plan: Plan, po: PlanOutcom
         rules = _rules_from_results(plan, po, perf)
     po.completed = 1
     launch.status = "completed"  # the monitor stops polling it
+    from .db import Alert
+    for a in session.scalars(select(Alert).where(Alert.launch_id == launch.id, Alert.status != "resolved")):
+        a.status = "resolved"  # automation never acts on a finished campaign
     used = float(((plan.estimate or {}).get("assumptions") or {}).get("calibration_factor") or 1.0)
     from_history = str((plan.estimate or {}).get("source", "")).startswith("account_history")
     # account history already reflects real results: correcting it again would double count

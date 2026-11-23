@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import settings_store
-from .config import MONITOR_INTERVAL_HOURS, PKR_PER_USD
+from . import fx
+from .config import MONITOR_INTERVAL_HOURS
 from .db import Alert, Launch, MetricSnapshot, Plan, get_session
 from .meta_client import MetaClient, MetaError
 from .actions import auto_apply, concretize
@@ -74,7 +75,7 @@ def check_launch(session: Session, client: MetaClient, launch: Launch, currency:
         log.warning("lifetime insights failed for launch %s: %s", launch.id, ex)
         lifetime = None
     days_active = _days_active(launch, camp, lifetime, now)
-    daily_usd = plan.budget_pkr / PKR_PER_USD / max(plan.duration_days, 1)
+    daily_usd = plan.budget_pkr / fx.launch_rate(launch, plan) / max(plan.duration_days, 1)
 
     findings = evaluate(metrics, targets, daily_usd, days_active, camp.get("effective_status", ""), ads)
     tracking = _tracking_findings(session, client, launch, metrics, camp.get("effective_status", ""))
@@ -346,14 +347,18 @@ def run_once() -> dict:
                     s.rollback()
                     log.warning("AI advice failed: %s", ex)
                     result["errors"].append(f"AI advice: {ex}")
-                try:
-                    from .actions import pending_alerts
-                    logs = auto_apply(s, client, pending_alerts(s))
-                    result["auto_actions"] = [{"alert_id": l.alert_id, "ok": bool(l.ok),
-                                               "description": l.description, "error": l.error} for l in logs]
-                except Exception as ex:
-                    log.warning("auto-apply failed: %s", ex)
-                    result["errors"].append(f"auto-actions: {ex}")
+            # automation also runs on quiet runs: alerts held back earlier get their turn
+            try:
+                from .actions import pending_alerts
+                checked_ok = {r["launch_id"] for r in result["checked"]}
+                logs = auto_apply(s, client, pending_alerts(s, checked_ok, ad_account_path(vals["meta_ad_account_id"])))
+                result["auto_actions"] = [{"alert_id": l.alert_id, "ok": bool(l.ok),
+                                           "description": l.description, "error": l.error} for l in logs]
+            except Exception as ex:
+                s.rollback()
+                log.warning("auto-apply failed: %s", ex)
+                result["errors"].append(f"auto-actions: {ex}")
+            if new_ids:
                 try:
                     result["email"] = send_alert_email(s, new_ids)
                 except Exception as ex:  # never let email failures break monitoring

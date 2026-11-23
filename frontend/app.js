@@ -271,7 +271,11 @@ async function init() {
   $("#niche").innerHTML = Object.entries(meta.niches)
     .map(([k, label]) => `<option value="${k}" ${k === meta.default_niche ? "selected" : ""}>${label}</option>`)
     .join("");
-  $("#rate").textContent = `Converted at 1 USD = ${meta.pkr_per_usd} PKR`;
+  const fxi = meta.fx || {};
+  const when = fxi.updated ? new Date(fxi.updated).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  $("#rate").textContent = fxi.source === "live" ? `Today's rate: 1 USD = ${(+meta.pkr_per_usd).toFixed(2)} PKR · updated ${when}`
+    : fxi.source === "saved" ? `1 USD = ${(+meta.pkr_per_usd).toFixed(2)} PKR · last known rate, ${when} (the live rate could not be reached)`
+    : `1 USD = ${meta.pkr_per_usd} PKR (fixed rate from settings)`;
   PKR_PER_USD = meta.pkr_per_usd;
   if (currentPlan) fillForm(currentPlan.inputs);
   updateConversions();
@@ -1417,4 +1421,22 @@ $("#backup-table").addEventListener("click", async (ev) => {
   const a = document.createElement("a");
   a.href = url; a.download = b.dataset.backup; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+
+// ---------- light / dark ----------
+
+function applyTheme(t) {
+  document.documentElement.setAttribute("data-theme", t);
+  const b = $("#btn-theme");
+  b.setAttribute("aria-pressed", String(t === "dark"));
+  b.querySelector("span").textContent = t === "dark" ? "Light mode" : "Dark mode";
+  b.querySelector("use").setAttribute("href", t === "dark" ? "#i-sun" : "#i-moon");
+  document.querySelector('meta[name="theme-color"]').setAttribute("content", t === "dark" ? "#18191a" : "#f0f2f5");
+}
+applyTheme(document.documentElement.getAttribute("data-theme") === "dark" ? "dark" : "light");
+$("#btn-theme").addEventListener("click", () => {
+  const t = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+  applyTheme(t);
+  try { localStorage.setItem("theme", t); } catch { /* private mode: this visit only */ }
 });

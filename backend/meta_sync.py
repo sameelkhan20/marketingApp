@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from .config import PKR_PER_USD
+from . import fx
 from .db import AccountStat
 from .meta_client import MetaClient, MetaError
 from .settings_store import ad_account_path
@@ -30,7 +30,7 @@ def to_usd(amount: float, currency: str) -> float:
     if currency == "USD":
         return amount
     if currency == "PKR":
-        return amount / PKR_PER_USD
+        return amount / fx.pkr_per_usd()
     # Other currencies: left as-is; the UI shows the account currency so the user knows.
     return amount
 

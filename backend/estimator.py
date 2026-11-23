@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 
 from .benchmarks import get_country, get_niche, price_multiplier
-from .config import PKR_PER_USD
+from . import fx
 
 # How much of the budget is burned on learning/testing before efficient delivery.
 TESTING_WASTE = 0.15
@@ -87,7 +87,8 @@ def estimate_orders(
     for e in season["events"]:
         warnings.append(f"{e['name']} on {e['date']} falls in this campaign. {e['note']}.")
 
-    budget_usd = budget_pkr / PKR_PER_USD
+    rate = fx.pkr_per_usd()  # today's rate; the plan keeps it in assumptions
+    budget_usd = budget_pkr / rate
     effective = budget_usd * (1 - TESTING_WASTE)
     daily = budget_usd / max(duration_days, 1)
 
@@ -152,7 +153,7 @@ def estimate_orders(
         orders_expected=expected,
         orders_high=high,
         cpa_usd=round(cpa, 2),
-        cpa_pkr=round(cpa * PKR_PER_USD),
+        cpa_pkr=round(cpa * rate),
         daily_usd=round(daily, 2),
         confidence=confidence,
         source=source,
@@ -164,7 +165,7 @@ def estimate_orders(
         profit_high_usd=profit_hi,
         season=season,
         assumptions={
-            "pkr_per_usd": PKR_PER_USD,
+            "pkr_per_usd": rate,
             "testing_waste_pct": TESTING_WASTE * 100,
             "country": c["name"],
             "niche": niche,

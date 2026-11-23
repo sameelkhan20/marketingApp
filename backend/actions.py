@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from . import settings_store
 from .settings_store import ad_account_path
 from .benchmarks import get_country
-from .config import PKR_PER_USD
+from . import fx
 from .db import ActionLog, Alert, Launch, Plan
 from .meta_client import MetaClient, MetaError, budget_minor_units
 
@@ -174,17 +174,19 @@ def _budget_bounds(session: Session, client: MetaClient, launch_id: int | None) 
     currency = "USD"
     daily_total_usd = 10**9
     country_min = 5
+    rate_now = fx.pkr_per_usd()
     if launch_id:
         launch = session.get(Launch, launch_id)
         plan = session.get(Plan, launch.plan_id) if launch else None
         if launch and plan:
             currency = launch.objects.get("currency", "USD")
-            daily_total_usd = plan.budget_pkr / PKR_PER_USD / max(plan.duration_days, 1)
+            rate_now = fx.launch_rate(launch, plan)  # the rate the campaign was built with
+            daily_total_usd = plan.budget_pkr / rate_now / max(plan.duration_days, 1)
             try:
                 country_min = get_country(plan.country)["min_daily_usd"]
             except KeyError:
                 pass
-    rate = PKR_PER_USD if currency == "PKR" else 1.0
+    rate = rate_now if currency == "PKR" else 1.0
     lo = budget_minor_units(country_min * 2 * rate, currency)
     hi = budget_minor_units(daily_total_usd * rate, currency) if daily_total_usd < 10**9 else 10**12
     return lo, max(hi, lo)
@@ -372,16 +374,33 @@ def undo(session: Session, client: MetaClient, log: ActionLog) -> ActionLog:
     return rev
 
 
-def pending_alerts(session: Session) -> list[Alert]:
-    """Open alerts of enabled kinds that automation has not handled yet. Alerts skipped earlier
-    (cooldown, one change per run, tracking) are retried here on later runs."""
+MAX_FAILED_TRIES = 2
+
+
+def pending_alerts(session: Session, launch_ids: set[int] | None = None, account: str | None = None) -> list[Alert]:
+    """Open alerts of enabled kinds that automation has not handled yet, only for launches that are
+    still running, were checked without error in this run (launch_ids) and belong to the connected
+    ad account. Alerts held back earlier (cooldown, one change per run, tracking) come back here."""
     enabled = [k for k, on in automation_settings(session)["enabled"].items() if on]
-    if not enabled:
+    if not enabled or launch_ids is not None and not launch_ids:
         return []
-    done = {r.alert_id for r in session.scalars(select(ActionLog).where(ActionLog.mode == "auto", ActionLog.ok == 1))}
-    rows = session.scalars(select(Alert).where(Alert.status == "open", Alert.kind.in_(enabled))
-                           .order_by(Alert.id)).all()
-    return [a for a in rows if a.id not in done]
+    tries: dict[int, list[int]] = {}
+    for r in session.scalars(select(ActionLog).where(ActionLog.mode == "auto", ActionLog.alert_id.is_not(None))):
+        tries.setdefault(r.alert_id, []).append(r.ok)
+    q = select(Alert).join(Launch, Launch.id == Alert.launch_id).where(
+        Alert.status == "open", Alert.kind.in_(enabled),
+        Launch.status.not_in(("completed", "archived", "deleted")))
+    if launch_ids is not None:
+        q = q.where(Alert.launch_id.in_(launch_ids))
+    out = []
+    for a in session.scalars(q.order_by(Alert.id)):
+        t = tries.get(a.id, [])
+        if 1 in t or len(t) >= MAX_FAILED_TRIES:
+            continue  # done, or it keeps failing: leave it to the owner
+        if account and (session.get(Launch, a.launch_id).objects or {}).get("account") not in (None, "", account):
+            continue  # made on another ad account
+        out.append(a)
+    return out
 
 
 # What automation may do for each alert kind, whatever order the AI put its options in.

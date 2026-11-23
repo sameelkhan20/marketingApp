@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 
 import requests
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -12,8 +12,8 @@ from sqlalchemy import func, select
 
 from . import settings_store
 from .benchmarks import COUNTRY_BENCHMARKS, DEFAULT_NICHE, NICHE_MULTIPLIERS
-from .config import (APP_BASE_URL, FRONTEND_DIR, MEDIA_DIR, META_API_VERSION, META_APP_ID, META_APP_SECRET,
-                     PKR_PER_USD)
+from .config import APP_BASE_URL, FRONTEND_DIR, MEDIA_DIR, META_API_VERSION, META_APP_ID, META_APP_SECRET
+from . import fx
 from . import actions, activity, creatives, gmail_auth, higgsfield, imagegen, monitor, notify, outcomes, readiness, usage
 from .auth.dependencies import user_from_token
 from .auth.routes import auth_router, users_router
@@ -35,7 +35,33 @@ async def _lifespan(_app):
 
 
 init_db()
-app = FastAPI(title="Meta Ads Planner", lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+# Owner-only routes, by their route template: checked after FastAPI has matched the route, so no
+# spelling of the URL ("+1", "1.0", "%201") can slip past it.
+OWNER_ROUTES = {
+    ("POST", "/api/meta/settings"), ("GET", "/api/meta/oauth/start"), ("POST", "/api/automation"),
+    ("POST", "/api/billing"), ("POST", "/api/meta/sync"),
+    ("POST", "/api/higgsfield/connect"), ("POST", "/api/higgsfield/complete"), ("POST", "/api/higgsfield/disconnect"),
+    ("POST", "/api/gmail/connect"), ("POST", "/api/gmail/complete"), ("POST", "/api/gmail/disconnect"),
+    # anything that creates or changes spend on Meta, or throws results away
+    ("POST", "/api/plans/{plan_id}/launch"), ("POST", "/api/alerts/{alert_id}/apply"),
+    ("POST", "/api/actions/{log_id}/undo"), ("POST", "/api/launches/{launch_id}/complete"),
+    ("DELETE", "/api/plans/{plan_id}"),
+    ("GET", "/api/backups"), ("POST", "/api/backups"), ("GET", "/api/backups/{name}"),
+}
+
+
+def _owner_guard(request: Request) -> None:
+    route = request.scope.get("route")
+    if route is None or (request.method, getattr(route, "path", "")) not in OWNER_ROUTES:
+        return
+    user = getattr(request.state, "user", None) or {}
+    if not user.get("is_superuser"):
+        raise HTTPException(403, "Only the owner can change this")
+
+
+app = FastAPI(title="Meta Ads Planner", lifespan=_lifespan, docs_url=None, redoc_url=None, openapi_url=None,
+              dependencies=[Depends(_owner_guard)])
 
 
 # ---------- auth (ported from core_auth_fixed) ----------
@@ -51,14 +77,6 @@ PUBLIC_API = {
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 
 
-# Owner-only: anything that changes credentials, connections, spend rules or costs.
-OWNER_ONLY = [
-    ("POST", r"/api/meta/settings"), ("GET", r"/api/meta/oauth/start"), ("POST", r"/api/automation"),
-    ("POST", r"/api/billing"), ("POST", r"/api/(higgsfield|gmail)/(connect|complete|disconnect)"),
-    # anything that creates or changes spend on Meta, or throws results away
-    ("POST", r"/api/plans/\d+/launch"), ("POST", r"/api/alerts/\d+/apply"), ("POST", r"/api/actions/\d+/undo"),
-    ("POST", r"/api/launches/\d+/complete"), ("DELETE", r"/api/plans/\d+"), ("POST", r"/api/meta/sync"),
-]
 MAX_JSON_BYTES = 1024 * 1024
 
 
@@ -83,9 +101,6 @@ async def require_auth(request: Request, call_next):
             request.state.user = await run_in_threadpool(user_from_token, header[7:])
         except HTTPException as ex:
             return JSONResponse({"detail": ex.detail}, status_code=ex.status_code, headers=ex.headers)
-        if not request.state.user["is_superuser"] and any(
-                m == request.method and re.fullmatch(p, path) for m, p in OWNER_ONLY):
-            return JSONResponse({"detail": "Only the owner can change this"}, status_code=403)
     return await call_next(request)
 
 
@@ -265,7 +280,7 @@ def meta():
         "countries": {k: v["name"] for k, v in COUNTRY_BENCHMARKS.items()},
         "niches": {k: v["label"] for k, v in NICHE_MULTIPLIERS.items()},
         "default_niche": DEFAULT_NICHE,
-        "pkr_per_usd": PKR_PER_USD,
+        "pkr_per_usd": fx.pkr_per_usd(), "fx": fx.info(),
     }
 
 
@@ -807,6 +822,8 @@ def complete_launch_now(launch_id: int):
             raise HTTPException(400, "No spend recorded yet; nothing to learn from")
         outcomes.complete_launch(s, l, s.get(Plan, l.plan_id), po)
         l.status = "archived"
+        for a in s.scalars(select(Alert).where(Alert.launch_id == l.id, Alert.status != "resolved")):
+            a.status = "resolved"  # nothing is acted on for a closed campaign
         s.commit()
         return _po_out(po)
 
@@ -1069,7 +1086,7 @@ def billing():
             po = s.get(PlanOutcome, l.id)
             ads.append({
                 "launch_id": l.id, "plan_id": p.id, "product": p.product, "country": p.country, "status": l.status,
-                "budget_pkr": p.budget_pkr, "budget_usd": round(p.budget_pkr / PKR_PER_USD, 2),
+                "budget_pkr": p.budget_pkr, "budget_usd": round(p.budget_pkr / fx.launch_rate(l, p), 2),
                 "spend_usd": po.spend_usd if po else 0, "purchases": po.purchases if po else 0,
                 "revenue_usd": po.revenue_usd if po else 0, "days_active": po.days_active if po else 0,
                 "duration_days": p.duration_days, "created_at": l.created_at.isoformat(),
@@ -1078,7 +1095,7 @@ def billing():
     out["ad_spend_usd"] = round(sum(a["spend_usd"] for a in ads), 2)
     out["ad_budget_usd"] = round(sum(a["budget_usd"] for a in ads if a["status"] not in ("completed", "archived", "deleted")), 2)
     out["ad_revenue_usd"] = round(sum(a["revenue_usd"] for a in ads), 2)
-    out["pkr_per_usd"] = PKR_PER_USD
+    out["pkr_per_usd"] = fx.pkr_per_usd()
     return out
 
 

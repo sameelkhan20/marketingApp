@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ads Planner</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=7" />
+  <title>Facon Ads Planner</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <meta name="theme-color" content="#f0f2f5" />
+  <script src="/static/theme.js?v=1"></script>
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -38,13 +38,14 @@
       <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
       <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
       <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
     </defs>
   </svg>
 
   <div id="login-screen" class="login" hidden>
     <form id="login-form" class="login-card">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Ads Planner</div>
+      <div class="brand"><img class="brand-mark" src="/static/favicon.svg" alt="" width="28" height="28" /><span class="brand-name">Facon <b>Ads Planner</b></span></div>
       <h1 id="login-title">Sign in</h1>
       <p class="muted" id="login-hint"></p>
       <label class="field"><span>Email</span><input name="email" type="email" autocomplete="username" required /></label>
@@ -56,7 +57,7 @@
 
   <div class="shell">
     <aside class="sidebar" id="sidebar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Ads Planner</div>
+      <div class="brand"><img class="brand-mark" src="/static/favicon.svg" alt="" width="28" height="28" /><span class="brand-name">Facon <b>Ads Planner</b></span></div>
       <nav class="nav">
         <button data-view="today" class="nav-item active"><svg class="icon"><use href="#i-sun"/></svg>Today</button>
         <div class="nav-label">Plan</div>
@@ -73,6 +74,7 @@
       </nav>
       <div class="sidebar-foot">
         <div class="who" id="who"></div>
+        <button id="btn-theme" class="nav-item" type="button" aria-pressed="false"><svg class="icon"><use href="#i-moon"/></svg><span>Dark mode</span></button>
         <button id="btn-logout" class="nav-item"><svg class="icon"><use href="#i-logout"/></svg>Sign out</button>
       </div>
     </aside>
@@ -387,7 +389,7 @@
             </form>
             <div class="card owner-only" id="team-card">
               <div class="card-title">Team</div>
-              <p class="muted">People you add can sign in and use everything except this card and backups. There is no public signup.</p>
+              <p class="muted">People you add can make, edit and read plans and campaigns. Only you can launch on Meta, apply or undo changes, and change connections, automation, budgets and backups. There is no public signup.</p>
               <ul class="rows" id="team-list"></ul>
               <form id="team-form" class="team-form">
                 <input name="email" type="email" placeholder="Email" required />
@@ -522,6 +524,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

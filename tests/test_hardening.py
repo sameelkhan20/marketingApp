@@ -327,3 +327,72 @@ def test_upload_must_be_a_real_image(client, auth, plan):
     r = client.post(f"/api/plans/{plan}/creatives/upload?creative_index=0",
                     files={"file": ("a.png", b"<html><script>alert(1)</script>", "image/png")}, headers=auth)
     assert r.status_code == 400
+
+
+# ---------- third review ----------
+
+def test_owner_routes_cannot_be_bypassed_with_odd_ids(client, auth, plan):
+    client.post("/api/users/register", json={"email": "odd@example.com", "password": "OddPass123"}, headers=auth)
+    tok = client.post("/api/auth/login", json={"email": "odd@example.com", "password": "OddPass123"}).json()
+    h = {"Authorization": f"Bearer {tok['access_token']}"}
+    for path in (f"/api/plans/+{plan}", f"/api/plans/{plan}.0", f"/api/plans/%20{plan}"):
+        assert client.delete(path, headers=h).status_code in (403, 404, 422), path
+    for path in (f"/api/plans/+{plan}/launch", "/api/alerts/1.0/apply", "/api/actions/+1/undo", "/api/launches/+1/complete"):
+        assert client.post(path, json={"option_index": 0}, headers=h).status_code in (403, 422), path
+    with get_session() as s:
+        assert s.get(Plan, plan) is not None
+
+
+def test_no_automation_on_closed_or_unchecked_launches(plan):
+    with get_session() as s:
+        s.query(ActionLog).delete()
+        s.query(Alert).update({"status": "resolved"}); s.commit()
+        settings_store.set_many(s, {"auto_actions": json.dumps({"no_purchases": True})})
+        l = _launch(s, plan)
+        a = _alert(s, l, plan, "no_purchases", "A1", [{"type": "pause", "level": "adset", "object_id": "A1"}])
+        assert a.id in {x.id for x in actions.pending_alerts(s, {l.id}, "act_1")}
+        assert actions.pending_alerts(s, set(), "act_1") == []            # its check failed this run
+        assert a.id not in {x.id for x in actions.pending_alerts(s, {l.id}, "act_OTHER")}  # another account
+        l.status = "archived"; s.commit()
+        assert a.id not in {x.id for x in actions.pending_alerts(s, {l.id}, "act_1")}
+        settings_store.set_many(s, {"auto_actions": ""})
+
+
+def test_failing_auto_action_gives_up(plan):
+    with get_session() as s:
+        s.query(ActionLog).delete()
+        s.query(Alert).update({"status": "resolved"}); s.commit()
+        settings_store.set_many(s, {"auto_actions": json.dumps({"high_cpa": True})})
+        l = _launch(s, plan)
+        a = _alert(s, l, plan, "high_cpa", "A1", [{"type": "budget_pct", "level": "adset", "object_id": "A1", "pct": -20}])
+        for _ in range(2):
+            s.add(ActionLog(alert_id=a.id, launch_id=l.id, mode="auto", spec={}, ok=0, error="x",
+                            created_at=datetime.utcnow() - timedelta(days=5)))
+        s.commit()
+        assert a.id not in {x.id for x in actions.pending_alerts(s, {l.id}, "act_1")}
+        settings_store.set_many(s, {"auto_actions": ""})
+
+
+def test_fit_days_exact_even_when_lopsided():
+    phases = [{"days": 1} for _ in range(9)] + [{"days": 100}]
+    planner._fit_days(phases, 10)
+    assert sum(p["days"] for p in phases) == 10 and all(p["days"] >= 1 for p in phases)
+    for total in (1, 3, 7, 30, 90):
+        ph = [{"days": d} for d in (0, 5, 50)]
+        planner._fit_days(ph, total)
+        assert sum(p["days"] for p in ph) == total and all(p["days"] >= 1 for p in ph)
+
+
+def test_closing_a_launch_resolves_its_alerts(client, auth, plan):
+    with get_session() as s:
+        l = _launch(s, plan)
+        _alert(s, l, plan, "high_cpa", "A1", [])
+        from backend.db import PlanOutcome
+        s.add(PlanOutcome(launch_id=l.id, plan_id=plan, days_active=10, duration_days=30, spend_usd=120, purchases=2,
+                          predicted_expected=10, predicted_low=5, predicted_high=15, predicted_so_far=3, ratio=0.66,
+                          verdict="behind"))
+        s.commit()
+        lid = l.id
+    assert client.post(f"/api/launches/{lid}/complete", headers=auth).status_code == 200
+    with get_session() as s:
+        assert not s.query(Alert).filter(Alert.launch_id == lid, Alert.status != "resolved").count()
