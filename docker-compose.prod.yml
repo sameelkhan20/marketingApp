@@ -1,0 +1,20 @@
+# Production on the shared VPS: Traefik (network morrow_web) routes APP_HOST with Let's Encrypt.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  planner:
+    ports: !reset []           # no host port: only Traefik reaches it
+    networks:
+      - web
+    mem_limit: 768m
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: morrow_web
+      traefik.http.routers.ads-planner.rule: Host(`${APP_HOST:?set APP_HOST in .env}`)
+      traefik.http.routers.ads-planner.entrypoints: websecure
+      traefik.http.routers.ads-planner.tls.certresolver: le
+      traefik.http.services.ads-planner.loadbalancer.server.port: "8000"
+
+networks:
+  web:
+    external: true
+    name: morrow_web

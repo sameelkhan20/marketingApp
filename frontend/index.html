@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ads Planner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=7" />
+</head>
+<body>
+  <!-- Icon sprite (lucide, 1.5 stroke) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8z"/></symbol>
+      <symbol id="i-logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8M21 3v5h-5"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+      <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4zM22 2 11 13"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-wallet" viewBox="0 0 24 24"><path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"/><path d="M21 9h-6a3 3 0 0 0 0 6h6z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
+    </defs>
+  </svg>
+
+  <div id="login-screen" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Ads Planner</div>
+      <h1 id="login-title">Sign in</h1>
+      <p class="muted" id="login-hint"></p>
+      <label class="field"><span>Email</span><input name="email" type="email" autocomplete="username" required /></label>
+      <label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
+      <button type="submit" id="login-btn" class="btn primary block">Sign in</button>
+      <p class="form-error" id="login-error" role="alert"></p>
+    </form>
+  </div>
+
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Ads Planner</div>
+      <nav class="nav">
+        <button data-view="today" class="nav-item active"><svg class="icon"><use href="#i-sun"/></svg>Today</button>
+        <div class="nav-label">Plan</div>
+        <button data-view="plan" class="nav-item"><svg class="icon"><use href="#i-plus"/></svg>New plan</button>
+        <button data-view="history" class="nav-item"><svg class="icon"><use href="#i-list"/></svg>My plans</button>
+        <div class="nav-label">Run</div>
+        <button data-view="monitor" class="nav-item"><svg class="icon"><use href="#i-activity"/></svg>Campaigns<span id="alert-count" class="count" title="Open alerts" hidden></span></button>
+        <button data-view="rules" class="nav-item"><svg class="icon"><use href="#i-book"/></svg>Learning</button>
+        <button data-view="activity" class="nav-item"><svg class="icon"><use href="#i-clock"/></svg>Activity</button>
+        <div class="nav-label">Setup</div>
+        <button data-view="meta" class="nav-item"><svg class="icon"><use href="#i-plug"/></svg>Connections<span id="meta-dot" class="status-dot" title="Meta connection"></span></button>
+        <button data-view="billing" class="nav-item"><svg class="icon"><use href="#i-wallet"/></svg>Payments</button>
+        <button data-view="account" class="nav-item"><svg class="icon"><use href="#i-user"/></svg>Account</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="who" id="who"></div>
+        <button id="btn-logout" class="nav-item"><svg class="icon"><use href="#i-logout"/></svg>Sign out</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu"><svg class="icon"><use href="#i-menu"/></svg></button>
+        <div class="grow">
+          <h1 id="page-title">New plan</h1>
+          <p class="page-sub" id="page-sub"></p>
+        </div>
+        <button id="btn-new-plan" class="btn" hidden><svg class="icon"><use href="#i-plus"/></svg>Start a new plan</button>
+      </header>
+
+      <main class="content">
+        <!-- ================= TODAY ================= -->
+        <section id="view-today" class="view">
+          <div class="kpis" id="today-stats"></div>
+          <div class="card flush">
+            <div class="card-head padded"><div class="card-title">What to do now</div><span class="hint" style="margin:0" id="today-date"></span></div>
+            <div id="today-list" class="todo"></div>
+          </div>
+        </section>
+
+        <!-- ================= NEW PLAN ================= -->
+        <section id="view-plan" class="view" hidden>
+          <div class="plan-top">
+            <form id="plan-form" class="card">
+              <div class="card-title">Campaign inputs</div>
+              <label class="field"><span>Total budget</span>
+                <div class="affix"><em>PKR</em><input name="budget_pkr" type="number" min="1000" step="500" value="100000" required /></div>
+                <small class="conv" id="conv-budget"></small>
+              </label>
+              <label class="field"><span>Target country</span><select name="country" id="country"></select></label>
+              <label class="field"><span>Product</span>
+                <input name="product" type="text" placeholder="Black biker leather jacket" required />
+              </label>
+              <label class="field"><span>Type of jacket</span><select name="niche" id="niche"></select></label>
+              <div class="field-row">
+                <label class="field"><span>Selling price</span>
+                  <div class="affix"><em>USD</em><input name="price_usd" type="number" min="1" step="1" value="120" required /></div>
+                  <small class="conv" id="conv-price"></small>
+                </label>
+                <label class="field"><span>Run for</span>
+                  <div class="affix suffix"><input name="duration_days" type="number" min="3" max="90" value="30" required /><em>days</em></div>
+                </label>
+              </div>
+              <div class="field-group">
+                <div class="group-title">For the profit figure <span class="optional">optional</span></div>
+                <div class="field-row">
+                  <label class="field"><span>Your cost per jacket</span>
+                    <div class="affix"><em>USD</em><input name="unit_cost_usd" type="number" min="0" step="0.5" placeholder="0" /></div>
+                  </label>
+                  <label class="field"><span>Shipping per order</span>
+                    <div class="affix"><em>USD</em><input name="shipping_usd" type="number" min="0" step="0.5" placeholder="0" /></div>
+                  </label>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button type="submit" id="btn-generate" class="btn primary block">Create the plan</button>
+              </div>
+              <p class="hint" id="rate"></p>
+            </form>
+
+            <div class="card estimate" id="estimate-card" hidden>
+              <div class="card-head"><div class="card-title">Expected orders</div><span class="hint" style="margin:0" id="est-updating"></span></div>
+              <div class="est-figure">
+                <span id="est-low">0</span><span class="dash">–</span><span id="est-high">0</span>
+                <span class="unit">orders</span>
+              </div>
+              <div class="range" id="est-range"></div>
+              <p class="est-meta">Expected <strong id="est-expected">0</strong> · <span id="est-confidence" class="conf"></span> · <span id="est-source"></span></p>
+              <dl class="stats">
+                <div><dt>Budget</dt><dd id="est-usd"></dd></div>
+                <div><dt>Daily spend</dt><dd id="est-daily"></dd></div>
+                <div><dt>Ad cost per order</dt><dd id="est-cpa"></dd></div>
+                <div><dt title="CPM: what Meta charges for 1,000 ad views">Cost per 1,000 views</dt><dd id="est-cpm"></dd></div>
+                <div><dt title="CTR: share of people who see the ad and click it">Click rate</dt><dd id="est-ctr"></dd></div>
+                <div><dt title="Conversion rate: share of store visitors who buy">Visitors who buy</dt><dd id="est-cvr"></dd></div>
+              </dl>
+              <dl class="stats profit" id="est-profit" hidden>
+                <div><dt>You keep per order</dt><dd id="est-margin"></dd></div>
+                <div><dt>Break-even cost per order</dt><dd id="est-breakeven"></dd></div>
+                <div><dt>Expected profit</dt><dd id="est-profit-v"></dd></div>
+              </dl>
+              <p class="season" id="est-season"></p>
+              <ul id="est-warnings" class="notes"></ul>
+            </div>
+
+            <div class="card empty-estimate" id="estimate-empty">
+              <div class="card-title">Expected orders</div>
+              <p class="muted">Type the budget, country and product. The order range appears here and updates as you change anything. It uses your Meta history where it exists, and industry benchmarks otherwise.</p>
+            </div>
+          </div>
+
+          <div id="plan-card" class="card plan" hidden>
+            <div class="plan-head">
+              <div>
+                <div class="eyebrow">Plan <span id="plan-id"></span> <span id="plan-status" class="tag"></span></div>
+                <ol class="steps" id="plan-steps">
+                  <li data-step="draft">Review</li><li data-step="approved">Approve</li><li data-step="launched">Launch</li><li data-step="running">Run</li>
+                </ol>
+                <p class="next" id="plan-next"></p>
+              </div>
+              <div class="toolbar">
+                <button id="btn-copy-plan" class="btn ghost" title="Start a new plan with the same inputs"><svg class="icon"><use href="#i-copy"/></svg>Copy</button>
+                <button id="btn-delete-plan" class="btn ghost danger-text" hidden><svg class="icon"><use href="#i-trash"/></svg>Delete</button>
+                <button id="btn-edit" class="btn"><svg class="icon"><use href="#i-pencil"/></svg>Edit</button>
+                <button id="btn-approve" class="btn primary"><svg class="icon"><use href="#i-check"/></svg>Approve plan</button>
+                <button id="btn-launch" class="btn primary" hidden>Create on Meta, paused</button>
+              </div>
+            </div>
+            <div id="launch-info" class="panel" hidden></div>
+            <div id="readiness" class="panel" hidden></div>
+            <div id="plan-view"></div>
+
+            <div id="plan-editor" hidden>
+              <p class="muted">Change anything below. The app remembers what you changed and why, and writes the next plans that way.</p>
+              <div id="editor-sections"></div>
+              <label class="field note-field"><span>Why did you change it? <em>optional, but this is what the app learns from</em></span>
+                <textarea id="edit-note" rows="2" placeholder="I never run interest stacks, broad only. Testing budget should be 20%"></textarea>
+              </label>
+              <div class="form-actions">
+                <button id="btn-cancel-edit" class="btn">Cancel</button>
+                <button id="btn-save-edit" class="btn primary">Save changes</button>
+              </div>
+            </div>
+
+            <div id="creatives-panel" class="plan-section" hidden>
+              <div class="section-head">
+                <h3>Ad images</h3><span class="muted small" id="creatives-status"></span>
+              </div>
+              <div class="photo-row">
+                <div id="product-photo-preview" class="photo-box"></div>
+                <div class="photo-fields">
+                  <label class="field"><span>Product photo, used as the reference so the jacket stays accurate</span>
+                    <input type="file" id="product-photo" accept="image/png,image/jpeg,image/webp" />
+                  </label>
+                  <div class="field-row tight">
+                    <label class="field grow"><span>Brand style</span>
+                      <input type="text" id="brand-style" placeholder="Dark moody tones, urban, no bright colours" />
+                    </label>
+                    <button type="button" id="btn-brand-save" class="btn">Save</button>
+                  </div>
+                </div>
+              </div>
+              <div id="creative-slots"></div>
+            </div>
+
+            <details class="versions">
+              <summary>Version history</summary>
+              <ol id="version-list"></ol>
+            </details>
+          </div>
+        </section>
+
+        <!-- ================= HISTORY ================= -->
+        <section id="view-history" class="view" hidden>
+          <div class="card flush">
+            <table class="table" id="history-table">
+              <thead><tr><th class="num">#</th><th>Product</th><th>Country</th><th class="num">Budget</th><th class="num">Orders expected</th><th>Orders so far</th><th>Status</th><th class="num">Created</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ================= LEARNING ================= -->
+        <section id="view-rules" class="view" hidden>
+          <div class="card">
+            <div class="card-title">Prediction accuracy</div>
+            <p class="muted">Each launch's estimate is compared with real purchases. Completed launches set a per-country correction that multiplies future estimates, and their results become rules.</p>
+            <div id="calibration" class="calibration"></div>
+          </div>
+          <div class="card flush">
+            <table class="table" id="outcome-table">
+              <thead><tr><th>Plan</th><th>Country</th><th class="num">Days</th><th>Predicted</th><th class="num">Actual</th><th class="num">Spend</th><th>Verdict</th><th>Learned</th></tr></thead>
+              <tbody></tbody>
+            </table>
+            <div id="action-stats" class="table-foot"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Learned rules</div>
+            <p class="muted">Every new plan follows these. Deactivate anything that is wrong.</p>
+            <form id="rule-form" class="field-row tight">
+              <input id="rule-input" type="text" placeholder="Add a rule, for example: always start with Advantage+ broad" />
+              <button type="submit" class="btn">Add rule</button>
+            </form>
+            <ul id="rule-list" class="rows"></ul>
+          </div>
+        </section>
+
+        <!-- ================= MONITOR ================= -->
+        <section id="view-monitor" class="view" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div class="card-title">Alerts</div>
+              <div class="toolbar">
+                <select id="alert-filter" class="compact">
+                  <option value="open">Open</option>
+                  <option value="acknowledged">Acknowledged</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="all">All</option>
+                </select>
+                <button id="btn-monitor-run" class="btn"><svg class="icon"><use href="#i-refresh"/></svg>Check now</button>
+              </div>
+            </div>
+            <p class="hint" id="monitor-state"></p>
+            <div id="alert-list"></div>
+          </div>
+
+          <div id="launch-list"></div>
+
+          <div class="split">
+            <div class="card">
+              <div class="card-title">Automation</div>
+              <p class="muted">Off by default. When an alert type is on, the monitor runs that alert's first executable option itself: a pause or a budget change on the ad set or ad. Resuming and campaign changes are never automatic, and every change can be undone.</p>
+              <div id="auto-kinds" class="switches"></div>
+              <div class="field-row tight end">
+                <label class="field"><span>Max budget change per action</span>
+                  <div class="affix suffix"><input id="auto-max-pct" type="number" min="1" max="50" value="20" /><em>%</em></div>
+                </label>
+                <button id="btn-auto-save" class="btn primary">Save</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">Action log</div>
+              <ul id="action-log" class="rows"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= ACTIVITY ================= -->
+        <section id="view-activity" class="view" hidden>
+          <div class="card flush">
+            <form class="filters" id="activity-filters">
+              <div class="search"><svg class="icon"><use href="#i-search"/></svg><input name="q" type="search" placeholder="Search" /></div>
+              <select name="kind" class="compact"><option value="">All areas</option></select>
+              <select name="level" class="compact">
+                <option value="">All results</option><option value="ok">Done</option><option value="warning">Warnings</option><option value="error">Errors</option><option value="info">Info</option>
+              </select>
+            </form>
+            <div id="activity-list" class="activity"></div>
+            <div class="table-foot center"><button id="btn-activity-more" class="btn small" hidden>Load older</button></div>
+          </div>
+        </section>
+
+        <!-- ================= PAYMENTS ================= -->
+        <section id="view-billing" class="view" hidden>
+          <div class="kpis" id="billing-kpis"></div>
+
+          <div class="split wide-left">
+            <div class="card">
+              <div class="card-head"><div class="card-title">AI cost by day</div><span class="hint" style="margin:0" id="billing-month"></span></div>
+              <div id="billing-chart" class="bars"></div>
+            </div>
+            <div class="card flush">
+              <div class="card-head padded"><div class="card-title">By feature, this month</div></div>
+              <table class="table" id="billing-features">
+                <thead><tr><th>Feature</th><th class="num">Calls</th><th class="num">Images</th><th class="num">Cost</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card flush">
+            <div class="card-head padded">
+              <div>
+                <div class="card-title">Meta ad spend</div>
+                <p class="hint">Read from each campaign at every monitor check. Meta bills your card directly; this is what the campaigns have spent so far</p>
+              </div>
+            </div>
+            <table class="table" id="billing-ads">
+              <thead><tr><th>Campaign</th><th>Status</th><th class="num">Budget</th><th>Spent of budget</th><th class="num">Spent</th><th class="num">Orders</th><th class="num">Revenue</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <div class="split">
+            <form class="card" id="billing-form">
+              <div class="card-title">Monthly AI budget</div>
+              <p class="muted">When this month's estimated AI cost reaches the budget, new AI work pauses: plans use the template, images are refused and alerts keep their built-in advice. 0 turns the limit off.</p>
+              <div class="field-row tight end">
+                <label class="field"><span>Budget per month</span><div class="affix"><em>USD</em><input name="budget_usd" type="number" min="0" step="1" /></div></label>
+                <button type="submit" class="btn primary">Save</button>
+              </div>
+              <details class="prices">
+                <summary>Price table</summary>
+                <p class="hint">Estimated list prices in US dollars: per million tokens in and out, or per image. The providers' own dashboards are the source of truth</p>
+                <div id="price-rows"></div>
+              </details>
+            </form>
+            <div class="card flush">
+              <div class="card-head padded"><div class="card-title">Recent AI calls</div></div>
+              <table class="table" id="billing-recent">
+                <thead><tr><th>When</th><th>Feature</th><th class="num">Tokens or images</th><th class="num">Cost</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================= ACCOUNT ================= -->
+        <section id="view-account" class="view" hidden>
+          <div class="split">
+            <form class="card" id="password-form">
+              <div class="card-title">Change your password</div>
+              <p class="muted">At least 8 characters.</p>
+              <label class="field"><span>Current password</span><input name="current_password" type="password" autocomplete="current-password" required /></label>
+              <label class="field"><span>New password</span><input name="new_password" type="password" autocomplete="new-password" minlength="8" required /></label>
+              <label class="field"><span>New password again</span><input name="repeat" type="password" autocomplete="new-password" minlength="8" required /></label>
+              <div class="form-actions"><button type="submit" class="btn primary">Change password</button></div>
+            </form>
+            <div class="card owner-only" id="team-card">
+              <div class="card-title">Team</div>
+              <p class="muted">People you add can sign in and use everything except this card and backups. There is no public signup.</p>
+              <ul class="rows" id="team-list"></ul>
+              <form id="team-form" class="team-form">
+                <input name="email" type="email" placeholder="Email" required />
+                <input name="password" type="password" placeholder="Their first password, 8+ characters" minlength="8" autocomplete="new-password" required />
+                <button type="submit" class="btn">Add person</button>
+              </form>
+            </div>
+          </div>
+          <div class="card flush owner-only" id="backup-card">
+            <div class="card-head padded">
+              <div>
+                <div class="card-title">Backups</div>
+                <p class="hint">A copy of all plans, results, learned rules and settings is made every day on the server, and the last 14 are kept. Download one now and then to keep a copy off the server.</p>
+              </div>
+              <button id="btn-backup" class="btn"><svg class="icon"><use href="#i-refresh"/></svg>Back up now</button>
+            </div>
+            <table class="table" id="backup-table">
+              <thead><tr><th>Made</th><th class="num">Size</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- ================= CONNECTIONS ================= -->
+        <section id="view-meta" class="view" hidden>
+          <div class="split wide-left">
+            <form id="meta-form" class="card">
+              <div class="card-title">Meta ad account</div>
+              <p class="muted">Fill these four, press <b>Check connection</b>, then <b>Save</b>. The token stays on this server only. <b>Check connection</b> also lists the ids the token can see, so you can copy them from there.</p>
+              <label class="field"><span>Access token</span>
+                <input name="meta_access_token" type="password" autocomplete="off" placeholder="EAAB…" />
+                <small class="where">Business Settings → Users → System users → Generate new token (permissions: ads_management, ads_read, pages_read_engagement)</small>
+              </label>
+              <label class="field"><span>Ad account id</span>
+                <input name="meta_ad_account_id" type="text" placeholder="act_1234567890" />
+                <small class="where">Ads Manager: the number after <code>act=</code> in the address bar</small>
+              </label>
+              <div class="field-row">
+                <label class="field"><span>Page id</span><input name="meta_page_id" type="text" /><small class="where">Your Facebook Page → About → Page transparency</small></label>
+                <label class="field"><span>Pixel or dataset id</span><input name="meta_pixel_id" type="text" /><small class="where">Events Manager → Data sources → the number under the pixel's name</small></label>
+              </div>
+              <label class="field"><span>Store URL, the landing page for ads</span>
+                <input name="store_url" type="url" placeholder="https://yourstore.com/jackets" />
+              </label>
+              <label class="field"><span>Fallback image URLs, comma separated</span>
+                <textarea name="creative_image_urls" rows="2" placeholder="https://…/jacket1.jpg, https://…/jacket2.jpg"></textarea>
+              </label>
+              <div class="form-actions">
+                <button type="button" id="btn-oauth" class="btn" hidden>Connect with Facebook</button>
+                <button type="button" id="btn-meta-check" class="btn">Check connection</button>
+                <button type="submit" class="btn primary">Save</button>
+              </div>
+            </form>
+
+            <div class="stack">
+              <div class="card">
+                <div class="card-title">What the token can see</div>
+                <div id="meta-status" class="muted">Not checked yet</div>
+              </div>
+
+              <div class="card">
+                <div class="card-head">
+                  <div class="card-title">Email alerts</div>
+                  <div class="toolbar">
+                    <button id="btn-digest" class="btn small">Send digest</button>
+                    <button id="btn-notify-test" class="btn small"><svg class="icon"><use href="#i-send"/></svg>Test email</button>
+                  </div>
+                </div>
+                <div class="conn-status" id="notify-status">Loading</div>
+                <details class="connect" data-svc="gmail" id="gmail-box">
+                  <summary id="gmail-summary">Send from a different Gmail account</summary>
+                  <div class="conn-line" id="gmail-state"></div>
+                  <ol class="howto">
+                    <li>One time only: in Google Cloud Console, open the OAuth client of <code>GMAIL_CLIENT_ID</code> and add <code>http://127.0.0.1:8765/</code> under <b>Authorized redirect URIs</b>. Without it Google shows "redirect_uri_mismatch".</li>
+                    <li>Click <b>Sign in with Google</b> and choose the account.</li>
+                    <li>Google then opens a page that does not load. Copy its whole address from the address bar and paste it below.</li>
+                  </ol>
+                  <div class="toolbar">
+                    <button type="button" class="btn small" data-connect="gmail">Sign in with Google</button>
+                    <button type="button" class="btn small ghost" data-disconnect="gmail" hidden>Go back to the server's Gmail</button>
+                  </div>
+                  <div class="paste" hidden>
+                    <div class="field-row tight"><input type="text" placeholder="Paste the address here: http://127.0.0.1:8765/?state=…" /><button type="button" class="btn primary" data-finish="gmail">Finish</button></div>
+                  </div>
+                </details>
+              </div>
+
+              <div class="card">
+                <div class="card-title">AI images, Higgsfield</div>
+                <p class="muted" id="hf-state">Loading</p>
+                <div class="connect" data-svc="higgsfield">
+                  <div class="toolbar">
+                    <button type="button" class="btn small" data-connect="higgsfield">Connect Higgsfield</button>
+                    <button type="button" class="btn small ghost" data-disconnect="higgsfield" hidden>Disconnect</button>
+                  </div>
+                  <div class="paste" hidden>
+                    <p class="hint">Allow access on Higgsfield. The browser then lands on a page that does not load: copy its whole address and paste it here.</p>
+                    <div class="field-row tight"><input type="text" placeholder="http://localhost:8765/callback?code=…" /><button type="button" class="btn primary" data-finish="higgsfield">Finish</button></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card flush">
+            <div class="card-head padded">
+              <div>
+                <div class="card-title">Account history by country</div>
+                <p class="hint" id="sync-info">Last two years. These figures replace the benchmarks in the estimator for every country listed</p>
+              </div>
+              <button id="btn-sync" class="btn"><svg class="icon"><use href="#i-refresh"/></svg>Sync from Meta</button>
+            </div>
+            <table class="table" id="stats-table">
+              <thead><tr><th>Country</th><th class="num">Spend</th><th class="num">Impressions</th><th class="num">Clicks</th><th class="num">Purchases</th><th class="num">CPM</th><th class="num">CTR</th><th class="num">CVR</th><th>Confidence</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="dialog" class="dialog">
+    <form method="dialog">
+      <h2 id="dialog-title"></h2>
+      <p id="dialog-text"></p>
+      <div class="form-actions">
+        <button value="cancel" class="btn" id="dialog-cancel">Cancel</button>
+        <button value="ok" class="btn primary" id="dialog-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" hidden></div>
+  <script src="/static/app.js?v=9"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+services:
+  planner:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"  # local only; Traefik reaches the container over its network
+    env_file: .env
+    environment:
+      APP_DATA_DIR: /data
+    volumes:
+      - planner-data:/data
+    restart: unless-stopped
+
+volumes:
+  planner-data:
