@@ -4,10 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Facon Ads Planner</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg?v=1" />
+  <link rel="apple-touch-icon" href="/static/icon.svg?v=1" />
   <meta name="theme-color" content="#f0f2f5" />
   <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=10" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -44,15 +45,28 @@
   </svg>
 
   <div id="login-screen" class="login" hidden>
-    <form id="login-form" class="login-card">
-      <div class="brand"><img class="brand-mark" src="/static/favicon.svg" alt="" width="28" height="28" /><span class="brand-name">Facon <b>Ads Planner</b></span></div>
-      <h1 id="login-title">Sign in</h1>
-      <p class="muted" id="login-hint"></p>
-      <label class="field"><span>Email</span><input name="email" type="email" autocomplete="username" required /></label>
-      <label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="8" required /></label>
-      <button type="submit" id="login-btn" class="btn primary block">Sign in</button>
-      <p class="form-error" id="login-error" role="alert"></p>
-    </form>
+    <div class="login-wrap">
+      <div class="login-logo">
+        <img src="/static/favicon.svg" alt="Facon" width="56" height="56" />
+        <div class="login-name">Facon <b>Ads Planner</b></div>
+        <p class="login-tag">Plan, launch and watch your Meta ads</p>
+      </div>
+      <form id="login-form" class="login-card" novalidate>
+        <h1 id="login-title">Sign in</h1>
+        <p class="muted" id="login-hint"></p>
+        <label class="field"><span>Email</span><input name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></label>
+        <label class="field"><span>Password</span>
+          <div class="pw">
+            <input name="password" type="password" autocomplete="current-password" minlength="8" placeholder="Your password" required />
+            <button type="button" class="pw-toggle" id="pw-toggle" aria-label="Show password" aria-pressed="false">Show</button>
+          </div>
+        </label>
+        <button type="submit" id="login-btn" class="btn primary block">Sign in</button>
+        <p class="form-error" id="login-error" role="alert"></p>
+        <p class="login-help">No account? The owner adds people on the Account page.</p>
+      </form>
+      <p class="login-foot">© Facon</p>
+    </div>
   </div>
 
   <div class="shell">
@@ -524,6 +538,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

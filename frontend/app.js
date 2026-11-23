@@ -86,7 +86,16 @@ async function showLogin() {
 
 $("#login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const body = Object.fromEntries(new FormData($("#login-form")).entries());
+  const form = $("#login-form");
+  if (!form.elements.email.value.trim() || !form.elements.password.value) {
+    $("#login-error").textContent = "Enter your email and password.";
+    return (form.elements.email.value.trim() ? form.elements.password : form.elements.email).focus();
+  }
+  if (!form.elements.email.checkValidity()) {
+    $("#login-error").textContent = "That email address does not look right.";
+    return form.elements.email.focus();
+  }
+  const body = Object.fromEntries(new FormData(form).entries());
   const btn = $("#login-btn");
   btn.disabled = true;
   try {
@@ -95,6 +104,7 @@ $("#login-form").addEventListener("submit", async (ev) => {
     tokens.set(data.access_token, data.refresh_token);
     $("#login-screen").hidden = true;
     $("#login-form").reset();
+    $("#login-form").elements.password.type = "password"; $("#pw-toggle").textContent = "Show";
     init().catch((e) => toast(e.message, true));
   } catch (e) { $("#login-error").textContent = e.message; }
   finally { btn.disabled = false; }
@@ -1439,4 +1449,16 @@ $("#btn-theme").addEventListener("click", () => {
   const t = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
   applyTheme(t);
   try { localStorage.setItem("theme", t); } catch { /* private mode: this visit only */ }
+});
+
+
+// ---------- sign-in: show / hide password ----------
+$("#pw-toggle").addEventListener("click", () => {
+  const input = $("#login-form").elements.password;
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  $("#pw-toggle").textContent = show ? "Hide" : "Show";
+  $("#pw-toggle").setAttribute("aria-pressed", String(show));
+  $("#pw-toggle").setAttribute("aria-label", show ? "Hide password" : "Show password");
+  input.focus();
 });

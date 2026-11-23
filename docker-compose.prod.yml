@@ -9,9 +9,10 @@ services:
     labels:
       traefik.enable: "true"
       traefik.docker.network: morrow_web
-      traefik.http.routers.ads-planner.rule: Host(`${APP_HOST:?set APP_HOST in .env}`)
-      traefik.http.routers.ads-planner.entrypoints: websecure
-      traefik.http.routers.ads-planner.tls.certresolver: le
+      traefik.http.routers.ads-planner-main.rule: Host(`${APP_HOST:?set APP_HOST in .env}`)
+      traefik.http.routers.ads-planner-main.entrypoints: websecure
+      traefik.http.routers.ads-planner-main.tls.certresolver: le
+      traefik.http.routers.ads-planner-main.service: ads-planner
       traefik.http.services.ads-planner.loadbalancer.server.port: "8000"
 
 networks:

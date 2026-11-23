@@ -729,3 +729,28 @@ textarea { height: auto; }
   .topbar { padding: 14px 16px; }
   .content { padding: 0 16px 40px; }
 }
+
+/* ---------- sign-in ---------- */
+.login { overflow-y: auto; }
+.login-wrap { width: 100%; max-width: 400px; display: flex; flex-direction: column; align-items: stretch; gap: 20px; margin: auto; }
+.login-logo { text-align: center; }
+.login-logo img { display: block; margin: 0 auto 12px; border-radius: 14px; box-shadow: 0 0 0 1px var(--line), var(--shadow-sm); }
+.login-name { font-size: 20px; line-height: 26px; color: var(--text-2); }
+.login-name b { color: var(--text); font-weight: 600; }
+.login-tag { margin-top: 4px; color: var(--text-3); font-size: 13px; }
+.login-card { max-width: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 28px 28px 20px; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06), 0 8px 16px rgba(0, 0, 0, 0.06); }
+.login-card h1 { font-size: 20px; line-height: 26px; margin-bottom: 4px; text-align: center; }
+.login-card > .muted { text-align: center; margin-bottom: 16px; }
+.login-card .field { margin-bottom: 14px; }
+.login-card input { height: 42px; font-size: 14px; }
+.login-card .btn.primary { margin-top: 6px; height: 44px; font-size: 15px; }
+.login-card .form-error { text-align: center; min-height: 18px; margin-top: 10px; }
+.login-help { text-align: center; color: var(--text-3); font-size: 12px; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px; }
+.login-foot { text-align: center; color: var(--text-3); font-size: 12px; }
+.pw { position: relative; }
+.pw input { padding-right: 64px; }
+.pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); height: 30px; padding: 0 10px; border: 0; border-radius: 6px;
+  background: none; color: var(--accent); font: 600 12px/1 var(--font); cursor: pointer; }
+.pw-toggle:hover { background: var(--accent-soft); }
+:root[data-theme="dark"] .login-card { box-shadow: none; }

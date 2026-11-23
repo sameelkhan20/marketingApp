@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Browser-tab icon: a bold white F on Facon blue, readable at 16px -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1877f2"/>
+      <stop offset="1" stop-color="#0656d6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <path d="M21 13 H45 V22.5 H31.5 V29 H42.5 V38 H31.5 V51 H21 Z" fill="#ffffff"/>
+</svg>
