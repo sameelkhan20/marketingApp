@@ -120,7 +120,7 @@ then the proof, then the offer and delivery/returns, then the call to action; sh
 US, UK and other markets abroad: buyers hesitate over an unknown store shipping from far away.
 Answer it with facts from the brief: the delivery time, tracked shipping, the returns policy, reviews,
 and "no customs fees on delivery" only when the brief says duties are included. Prices and sizes in
-the buyer's own terms (USD or GBP, US or UK sizes). break_even_cpa_usd already allows for refunds.
+the buyer's own terms (USD or GBP, US or UK sizes).
 Pakistan only: when the brief says cash on delivery, say it plainly ("Cash on delivery") in the
 primary text and the retargeting creative: it is the strongest trust signal there.
 When YOUR WINNERS lists ads that sold for this store, reuse what worked there (angles, hooks,
@@ -274,8 +274,7 @@ def _facts(inputs: dict, estimate: dict) -> dict:
             "meta_min_daily_per_ad_set_usd": cmin,
             "max_ad_sets_the_budget_supports": max(1, int(float(estimate.get("daily_usd") or 0) // (cmin * 2))),
             "delivery_days": inputs.get("delivery_days") or None,
-            "cash_on_delivery": bool(inputs.get("cod")),
-            "orders_refused_or_returned_pct": (estimate.get("assumptions") or {}).get("return_rate_pct", 0)}
+            "cash_on_delivery": bool(inputs.get("cod"))}
 
 
 def fit_to_budget(plan: dict, inputs: dict, estimate: dict) -> dict:

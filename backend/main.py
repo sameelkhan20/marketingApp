@@ -253,7 +253,6 @@ class PlanRequest(BaseModel):
     returns: str = Field(default="", max_length=150)
     social_proof: str = Field(default="", max_length=200)
     cod: bool = False                                          # cash on delivery offered
-    return_rate_pct: float = Field(default=0, ge=0, le=80)     # orders refused or returned
     unit_cost_usd: float = Field(ge=0, default=0)   # what one item costs you
     shipping_usd: float = Field(ge=0, default=0)    # shipping + packing per order
 
@@ -297,7 +296,6 @@ def _plan_out(p: Plan) -> dict:
             **{k: (p.brief or {}).get(k, 0 if k == "delivery_days" else "")
                for k in ("offer", "usp", "delivery_days", "returns", "social_proof")},
             "cod": bool((p.brief or {}).get("cod", False)),
-            "return_rate_pct": (p.brief or {}).get("return_rate_pct", 0),
             "unit_cost_usd": (p.estimate or {}).get("assumptions", {}).get("unit_cost_usd", 0),
             "shipping_usd": (p.estimate or {}).get("assumptions", {}).get("shipping_usd", 0),
         },
@@ -335,7 +333,6 @@ def _estimate(req: PlanRequest) -> dict:
             req.budget_pkr, req.country, req.niche, req.price_usd, req.duration_days,
             overrides=overrides, calibration=cal,
             unit_cost_usd=req.unit_cost_usd, shipping_usd=req.shipping_usd, delivery_days=req.delivery_days,
-            cod=req.cod, return_rate_pct=req.return_rate_pct,
         )
     except KeyError as ex:
         raise HTTPException(400, str(ex))
@@ -372,7 +369,7 @@ def create_plan(req: PlanRequest):
             niche=req.niche, price_usd=req.price_usd, duration_days=req.duration_days, estimate=e,
             category_note=req.category_note.strip(), brand_id=req.brand_id,
             brief={k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()
-                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod", "return_rate_pct")},
+                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod")},
         )
         p.versions.append(PlanVersion(version=1, source="ai", content=content))
         s.add(p)

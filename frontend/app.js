@@ -182,7 +182,6 @@ function formInputs() {
     returns: (fd.get("returns") || "").trim(),
     social_proof: (fd.get("social_proof") || "").trim(),
     cod: fd.get("country") === "PK" && !!$("#plan-form").elements.cod.checked,
-    return_rate_pct: +fd.get("return_rate_pct") || 0,
   };
 }
 
@@ -191,11 +190,11 @@ function fillForm(inputs) {
   f.elements.unit_cost_usd.value = ""; f.elements.shipping_usd.value = ""; f.elements.category_note.value = "";
   for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
   f.elements.price_usd.dataset.touched = "1";  // a saved plan's price is a real choice
-  f.elements.cod.checked = false; f.elements.return_rate_pct.value = "";
+  f.elements.cod.checked = false;
   for (const [k, v] of Object.entries(inputs)) {
     if (!f.elements[k]) continue;
     if (k === "cod") f.elements.cod.checked = !!v;
-    else f.elements[k].value = ((k === "delivery_days" || k === "return_rate_pct") && !v) ? "" : (v ?? "");
+    else f.elements[k].value = (k === "delivery_days" && !v) ? "" : (v ?? "");
   }
   updateNoteField();
   updateCodLine();
@@ -1632,14 +1631,13 @@ async function prefillBrief() {
     if (seq !== briefSeq || currentPlan) return;
     for (const k of BRIEF_KEYS) if (b[k] && !String(f.elements[k].value || "").trim()) f.elements[k].value = b[k];
     if (b.cod && f.elements.country.value === "PK") f.elements.cod.checked = true;
-    if (b.return_rate_pct && !f.elements.return_rate_pct.value) f.elements.return_rate_pct.value = b.return_rate_pct;
     $("#sell-box").open = !BRIEF_KEYS.some((k) => b[k]);  // open it when nothing is filled yet
   } catch { /* the form still works without it */ }
 }
 $("#plan-form").elements.brand_id.addEventListener("change", () => {
   const f = $("#plan-form");
   for (const k of BRIEF_KEYS) f.elements[k].value = "";  // another store, other facts
-  f.elements.cod.checked = false; f.elements.return_rate_pct.value = "";
+  f.elements.cod.checked = false;
   prefillBrief();
 });
 
