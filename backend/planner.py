@@ -117,6 +117,12 @@ creative a different `angle`, one of: "offer", "quality", "gift", "problem-solut
 product (material, size, count, the offer, the delivery time, the occasion): never generic
 openers like "Elevate", "Upgrade your", "Discover" or "Stop scrolling". Primary text: the benefit,
 then the proof, then the offer and delivery/returns, then the call to action; short lines.
+US, UK and other markets abroad: buyers hesitate over an unknown store shipping from far away.
+Answer it with facts from the brief: the delivery time, tracked shipping, the returns policy, reviews,
+and "no customs fees on delivery" only when the brief says duties are included. Prices and sizes in
+the buyer's own terms (USD or GBP, US or UK sizes). break_even_cpa_usd already allows for refunds.
+Pakistan only: when the brief says cash on delivery, say it plainly ("Cash on delivery") in the
+primary text and the retargeting creative: it is the strongest trust signal there.
 When YOUR WINNERS lists ads that sold for this store, reuse what worked there (angles, hooks,
 audiences) and say so in `summary`.
 
@@ -174,11 +180,12 @@ say why in `risks`."""
 
 
 BRIEF_FIELDS = {"offer": "Offer", "usp": "Why buy from us", "delivery_days": "Delivery time (days)",
-                "returns": "Returns", "social_proof": "Reviews / social proof"}
+                "returns": "Returns", "social_proof": "Reviews / social proof", "cod": "Cash on delivery"}
 
 
 def _brief_text(inputs: dict) -> str:
-    lines = [f"- {label}: {inputs[k]}" for k, label in BRIEF_FIELDS.items() if inputs.get(k) not in (None, "", 0)]
+    lines = [f"- {label}: {'yes' if inputs[k] is True else inputs[k]}" for k, label in BRIEF_FIELDS.items()
+             if inputs.get(k) not in (None, "", 0, False)]
     return "\n".join(lines) if lines else "- (nothing given: do not promise discounts, reviews or delivery times)"
 
 
@@ -266,7 +273,9 @@ def _facts(inputs: dict, estimate: dict) -> dict:
             "expected_purchases_per_week": round(weekly, 1),
             "meta_min_daily_per_ad_set_usd": cmin,
             "max_ad_sets_the_budget_supports": max(1, int(float(estimate.get("daily_usd") or 0) // (cmin * 2))),
-            "delivery_days": inputs.get("delivery_days") or None}
+            "delivery_days": inputs.get("delivery_days") or None,
+            "cash_on_delivery": bool(inputs.get("cod")),
+            "orders_refused_or_returned_pct": (estimate.get("assumptions") or {}).get("return_rate_pct", 0)}
 
 
 def fit_to_budget(plan: dict, inputs: dict, estimate: dict) -> dict:
@@ -343,6 +352,8 @@ def _template_plan(inputs: dict, estimate: dict, rules: list[str]) -> dict:
     offer = (inputs.get("offer") or "").strip()
     delivery = f" Delivered in {inputs['delivery_days']} days." if inputs.get("delivery_days") else ""
     returns = f" {inputs['returns'].strip()}." if (inputs.get("returns") or "").strip() else ""
+    if inputs.get("cod"):
+        returns += " Cash on delivery."
     niche_risks = [cat["risk"]]
     what = "the product from the reference photo, unchanged"
     return {

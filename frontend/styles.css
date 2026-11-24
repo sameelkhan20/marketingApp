@@ -783,3 +783,9 @@ details.sell[open] > summary { margin-bottom: 8px; }
 body.team .owner-only { display: none !important; }
 /* dark mode: white text on the light red is hard to read, use dark ink */
 [data-theme="dark"] #toast.error, [data-theme="dark"] .btn.danger { color: #1a0509; }
+
+/* a checkbox with its text on one line (cash on delivery) */
+.check-line { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 2px; color: var(--text); cursor: pointer; }
+.check-line[hidden] { display: none; }
+.check-line input { margin-top: 3px; }
+.check-line small { display: block; }

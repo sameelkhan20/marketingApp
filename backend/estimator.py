@@ -57,6 +57,8 @@ def estimate_orders(
     shipping_usd: float = 0.0,
     start: date | None = None,
     delivery_days: int = 0,
+    cod: bool = False,
+    return_rate_pct: float = 0.0,
 ) -> Estimate:
     """calibration: (factor, samples) from past launches in this country; multiplies the order estimate."""
     c = get_country(country)
@@ -126,8 +128,30 @@ def estimate_orders(
     if orders <= 0:
         warnings.append("No orders can be expected with these numbers: the cost per order cannot be estimated.")
 
-    # Profit per order = price - product cost - shipping. Break-even cost per order = that margin.
-    margin = round(price_usd - unit_cost_usd - shipping_usd, 2) if (unit_cost_usd or shipping_usd) else 0.0
+    # Returned, refunded or refused orders: Meta counts them as purchases, but they bring no money.
+    # Pakistan with cash on delivery and no rate given: assume 20% refused (typical for COD there).
+    home = country.upper() == "PK"
+    returns = max(0.0, min(float(return_rate_pct or 0), 80.0)) / 100
+    assumed_returns = False
+    if cod and home and returns == 0:
+        returns, assumed_returns = 0.20, True
+    if returns:
+        how = "are assumed to be" if assumed_returns else "are"
+        hint = " (cash on delivery: set your real rate under the profit figure)" if assumed_returns else ""
+        tip = ("Confirming COD orders by phone or WhatsApp before dispatch cuts refusals" if home else
+               "A size guide, real photos and the delivery time in the ad cut refunds")
+        warnings.append(f"About {returns:.0%} of orders {how} refunded or returned{hint}: of ~{int(round(orders))} "
+                        f"orders Meta reports, about {int(round(orders * (1 - returns)))} are paid. The targets allow "
+                        f"for it. {tip}")
+
+    # Profit per order Meta reports. Abroad (US, UK...): a refunded order loses the price, and the product and
+    # shipping are spent (sending it back to Pakistan costs more than it is worth). In Pakistan a refused parcel
+    # comes back: the product is kept, shipping is paid both ways. Break-even cost per reported order = margin.
+    if home:
+        margin_raw = (1 - returns) * (price_usd - unit_cost_usd) - shipping_usd * (1 + returns)
+    else:
+        margin_raw = (1 - returns) * price_usd - unit_cost_usd - shipping_usd
+    margin = round(margin_raw, 2) if (unit_cost_usd or shipping_usd) else 0.0
     profit = profit_lo = profit_hi = None
     if unit_cost_usd or shipping_usd:
         # from the unrounded order counts: rounding 0.7 orders up to 1 must not turn a loss into a profit
@@ -135,7 +159,8 @@ def estimate_orders(
         profit_lo = round(max(orders * (1 - spread), 0) * margin - budget_usd, 2)
         profit_hi = round(orders * (1 + spread) * margin - budget_usd, 2)
         if margin <= 0:
-            warnings.append(f"Price ${price_usd:.2f} does not cover cost and shipping: every order loses money.")
+            warnings.append(f"Price ${price_usd:.2f} does not cover cost, shipping{' and returns' if returns else ''}: "
+                            "every order loses money.")
         elif orders <= 0 or cpa > margin:
             warnings.append(f"At about ${cpa:.2f} per order this plan loses ${cpa - margin:.2f} on each order "
                             f"(you keep ${margin:.2f} after cost and shipping). Raise the price, cut cost, "
@@ -177,6 +202,9 @@ def estimate_orders(
             "calibration_samples": cal_samples,
             "unit_cost_usd": unit_cost_usd,
             "shipping_usd": shipping_usd,
+            "cod": bool(cod),
+            "return_rate_pct": round(returns * 100, 1),
+            "return_rate_assumed": assumed_returns,
         },
     )
 

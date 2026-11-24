@@ -55,6 +55,10 @@ def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
 
     add("page", bool(vals["meta_page_id"]), "Facebook Page id set" if vals["meta_page_id"] else "Page id missing: ads cannot be created")
     add("store_url", bool(vals["store_url"]), "Store URL set" if vals["store_url"] else "Store URL missing: ads cannot be created")
+    if live and vals["store_url"]:
+        from .storecheck import check as store_check
+        for c in store_check(vals["store_url"]):
+            add(c["key"], c["ok"], c["text"], hard=c["hard"])
     add("pixel", bool(vals["meta_pixel_id"]), "Pixel set: ad sets optimise for Purchase" if vals["meta_pixel_id"]
         else "No pixel: ad sets will optimise for link clicks, not purchases", hard=False)
 

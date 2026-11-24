@@ -8,7 +8,7 @@
   <link rel="apple-touch-icon" href="/static/icon.svg?v=1" />
   <meta name="theme-color" content="#f0f2f5" />
   <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=17" />
+  <link rel="stylesheet" href="/static/styles.css?v=18" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -152,6 +152,7 @@
                   <label class="field"><span>Returns</span><input name="returns" type="text" maxlength="150" placeholder="e.g. 30-day easy returns" /></label>
                 </div>
                 <label class="field"><span>Reviews / social proof</span><input name="social_proof" type="text" maxlength="200" placeholder="e.g. 4.8 stars from 1,200 buyers" /></label>
+                <label class="check-line" id="cod-line" hidden><input name="cod" type="checkbox" /> <span>Cash on delivery available <small class="hint">Pakistan plans: the ads say it</small></span></label>
               </details>
               <div class="field-group">
                 <div class="group-title">For the profit figure <span class="optional">optional</span></div>
@@ -159,10 +160,13 @@
                   <label class="field"><span>Your cost per item</span>
                     <div class="affix"><em>USD</em><input name="unit_cost_usd" type="number" min="0" step="0.5" placeholder="0" /></div>
                   </label>
-                  <label class="field"><span>Shipping per order</span>
+                  <label class="field"><span>Shipping, packing and duties per order</span>
                     <div class="affix"><em>USD</em><input name="shipping_usd" type="number" min="0" step="0.5" placeholder="0" /></div>
                   </label>
                 </div>
+                <label class="field"><span>Orders refunded or returned</span>
+                  <div class="affix suffix"><input name="return_rate_pct" type="number" min="0" max="80" step="1" placeholder="e.g. 10" /><em>%</em></div>
+                </label>
               </div>
               <div class="form-actions">
                 <button type="submit" id="btn-generate" class="btn primary block">Create the plan</button>
@@ -589,6 +593,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=20"></script>
+  <script src="/static/app.js?v=21"></script>
 </body>
 </html>
