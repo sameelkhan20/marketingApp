@@ -28,13 +28,24 @@ def applies_to(rule: str, country: str | None, niche: str | None) -> bool:
     return len(tag) == 2 and tag[0].upper() == country.upper() and (not niche or tag[1] == niche)
 
 
-def active_rules(session: Session, country: str | None = None, niche: str | None = None,
-                 limit: int | None = None) -> list[str]:
+def rule_fits(r: LearnedRule, country: str | None, niche: str | None, brand_id: int | None = None) -> bool:
+    """A rule shapes a plan when it was learned for the same store and category (or for every one)."""
+    same_store = brand_id is None or r.brand_id is None or int(r.brand_id) == int(brand_id)
+    return same_store and (not niche or not r.niche or r.niche == niche) and applies_to(r.rule, country, niche)
+
+
+def active_rule_rows(session: Session, country: str | None = None, niche: str | None = None,
+                     limit: int | None = None, brand_id: int | None = None) -> list[LearnedRule]:
     rows = session.scalars(
         select(LearnedRule).where(LearnedRule.active == 1).order_by(LearnedRule.weight.desc(), LearnedRule.id.desc())
     ).all()
-    out = [r.rule for r in rows if applies_to(r.rule, country, niche)]
+    out = [r for r in rows if rule_fits(r, country, niche, brand_id)]
     return out[:limit] if limit else out
+
+
+def active_rules(session: Session, country: str | None = None, niche: str | None = None,
+                 limit: int | None = None, brand_id: int | None = None) -> list[str]:
+    return [r.rule for r in active_rule_rows(session, country, niche, limit, brand_id)]
 
 
 def diff_plans(ai: dict, user: dict) -> list[str]:
@@ -62,10 +73,15 @@ def learn_from_edit(session: Session, plan_id: int, previous_plan: dict, user_pl
     if not changes and not note.strip():
         return []
 
-    existing = {r.lower().strip() for r in active_rules(session)}
+    from .benchmarks import CATEGORIES
+    from .db import Plan
+    plan = session.get(Plan, plan_id)
+    niche = plan.niche if plan and plan.niche in CATEGORIES else ""
+    brand = (plan.brand_id or 0) if plan else None
+    existing = {r.lower().strip() for r in active_rules(session, None, niche, brand_id=brand)}
     rules = [r for r in _extract_rules(changes, note) if r.lower().strip() not in existing]
     for r in rules:
-        session.add(LearnedRule(rule=r, source_plan_id=plan_id))
+        session.add(LearnedRule(rule=r, source_plan_id=plan_id, niche=niche, brand_id=brand))
     session.commit()
     return rules
 
@@ -80,9 +96,11 @@ def reinforce_on_approval(session: Session, plan_id: int) -> None:
     """Approved without edits: the rules that shaped this plan worked, bump their weight a little."""
     from .db import Plan
     plan = session.get(Plan, plan_id)
-    for r in rules_in_effect_for(session, plan.created_at):
-        if applies_to(r.rule, plan.country, plan.niche):
-            r.weight = round(min(3.0, r.weight + 0.1), 2)
+    used = (plan.estimate or {}).get("rules_used")
+    if not used:
+        return  # a template plan, or an older plan: no record of which rules shaped it
+    for r in session.scalars(select(LearnedRule).where(LearnedRule.id.in_(used), LearnedRule.active == 1)):
+        r.weight = round(min(3.0, r.weight + 0.1), 2)
     session.commit()
 
 

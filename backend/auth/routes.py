@@ -79,7 +79,7 @@ def login(user_data: UserLogin, request: Request):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                             detail="Too many wrong passwords. Wait 15 minutes and try again.")
     with get_session() as s:
-        user = s.scalar(select(User).where(User.email == user_data.email))
+        user = s.scalar(select(User).where(func.lower(User.email) == email))
         # Always run bcrypt so response time does not reveal whether the email exists.
         ok = verify_password(user_data.password, user.hashed_password if user else _DUMMY_HASH)
         if not user or not ok:
@@ -87,8 +87,8 @@ def login(user_data: UserLogin, request: Request):
                 first = len(_recent(pair_key, now)) == 1
             if first:  # one activity row per burst, not one per guess
                 from .. import activity
-                activity.record("auth", "login_failed", "Failed sign-in", f"email {user_data.email}, from {ip}",
-                                "warning", user_data.email)
+                activity.record("auth", "login_failed", "Failed sign-in", f"email {email}, from {ip}",
+                                "warning", email)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password")
         if not user.is_active:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
@@ -141,7 +141,7 @@ def refresh_session(request_data: TokenRefreshRequest):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
     with get_session() as s:
-        user = s.scalar(select(User).where(User.email == email, User.is_active == True))  # noqa: E712
+        user = s.scalar(select(User).where(func.lower(User.email) == email.lower(), User.is_active == True))  # noqa: E712
         if not user:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User account restricted")
         version = int(user.token_version or 0)
@@ -156,22 +156,24 @@ def refresh_session(request_data: TokenRefreshRequest):
 @users_router.post("/register", response_model=UserRegistrationResponse, status_code=status.HTTP_201_CREATED)
 def register_user(user: UserCreate, creds: HTTPAuthorizationCredentials | None = Depends(security_scheme)):
     """Only a signed-in owner can add users. There is no public signup."""
-    if creds is None or not user_from_token(creds.credentials)["is_superuser"]:
+    owner = user_from_token(creds.credentials) if creds is not None else None
+    if not owner or not owner["is_superuser"]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner can add users")
     try:
         row = create_user(user.email, user.password, superuser=False)
     except ValueError as ex:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ex))
     from .. import activity
-    activity.record("auth", "user_added", f"Team member added: {row['email']}", "", "ok")
+    activity.record("auth", "user_added", f"Team member added: {row['email']}", "", "ok", owner["email"])
     return UserRegistrationResponse(**row)
 
 
 def create_user(email: str, password: str, superuser: bool) -> dict:
     """Used by the owner's API call and by the server command that creates the first owner."""
+    email = email.strip().lower()
     hashed = get_password_hash(password)
     with _register_lock, get_session() as s:
-        if s.scalar(select(User).where(User.email == email)):
+        if s.scalar(select(User).where(func.lower(User.email) == email)):
             raise ValueError("Email already registered")
         row = User(email=email, hashed_password=hashed, is_superuser=superuser)
         s.add(row)

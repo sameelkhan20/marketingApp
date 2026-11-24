@@ -88,3 +88,25 @@ def _fresh_login_throttle():
     from backend.auth import routes
     routes._fails.clear()
     yield
+
+
+class _ActiveAccount:
+    """Stands in for Meta in launch-route tests: the account is active, uploads are not needed."""
+
+    def __init__(self, token="x"):
+        self.token = token
+
+    def account(self, act):
+        return {"currency": "USD", "account_status": 1}
+
+    def upload_image_bytes(self, act, data, name="x"):
+        return "HASH"
+
+    def delete_now(self, oid):
+        return {"success": True}
+
+
+@pytest.fixture
+def active_meta(monkeypatch):
+    from backend import main
+    monkeypatch.setattr(main, "MetaClient", _ActiveAccount)

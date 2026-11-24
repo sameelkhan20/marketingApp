@@ -25,6 +25,9 @@ DEFAULT_PRICES: dict[str, dict[str, float]] = {
     "anthropic:*": {"in": 4.0, "out": 20.0},
     "higgsfield:*": {"image": 0.0},  # paid with plan credits; set a per-image value to track it
     "gemini:gemini-3.1-flash-lite": {"in": 0.25, "out": 1.50},
+    "gemini:gemini-pro-latest": {"in": 2.00, "out": 12.00},
+    "gemini:gemini-3.1-pro-preview": {"in": 2.00, "out": 12.00},
+    "gemini:gemini-2.5-pro": {"in": 1.25, "out": 10.00},
     "gemini:*": {"in": 0.30, "out": 2.50, "image": 0.039},
     "openai:*": {"image": 0.04},
 }

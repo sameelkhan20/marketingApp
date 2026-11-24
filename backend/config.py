@@ -17,6 +17,8 @@ CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-5-5")
 # Text AI (plans, learning, alert advice): Claude when ANTHROPIC_API_KEY is set, else Gemini.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "").lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+# Plans are the money decision: a stronger model writes and reviews them (a few cents a plan).
+PLAN_MODEL = os.getenv("PLAN_MODEL", "gemini-pro-latest")
 _raw_image_key = os.getenv("IMAGE_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or (_raw_image_key if _raw_image_key and not _raw_image_key.startswith("sk-") else "")  # Google keys: AIza... or AQ....
 PKR_PER_USD = float(os.getenv("PKR_PER_USD", "280"))  # fallback only: the live rate is used (backend/fx.py)

@@ -7,7 +7,7 @@ import requests
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 
 from . import settings_store
@@ -48,6 +48,9 @@ OWNER_ROUTES = {
     ("POST", "/api/actions/{log_id}/undo"), ("POST", "/api/launches/{launch_id}/complete"),
     ("DELETE", "/api/plans/{plan_id}"),
     ("GET", "/api/backups"), ("POST", "/api/backups"), ("GET", "/api/backups/{name}"),
+    ("GET", "/api/brands/{brand_id}"), ("POST", "/api/brands"), ("POST", "/api/brands/{brand_id}"),
+    ("DELETE", "/api/brands/{brand_id}"), ("POST", "/api/brands/{brand_id}/check"),
+    ("POST", "/api/brands/{brand_id}/winners"),
 }
 
 
@@ -141,6 +144,10 @@ ACTIVITY_ROUTES = [
     ("DELETE", r"/api/rules/(\d+)", "learning", "rule_deactivated", "Rule #{0} deactivated"),
     ("POST", r"/api/meta/settings", "settings", "meta_saved", "Meta settings saved"),
     ("POST", r"/api/meta/sync", "settings", "meta_synced", "Meta history synced"),
+    ("POST", r"/api/brands/(\d+)/winners", "settings", "winners_synced", "Best ads synced for store #{0}"),
+    ("POST", r"/api/brands", "settings", "store_added", "Store added"),
+    ("POST", r"/api/brands/(\d+)", "settings", "store_saved", "Store #{0} saved"),
+    ("DELETE", r"/api/brands/(\d+)", "settings", "store_deleted", "Store #{0} deleted"),
     ("POST", r"/api/monitor/run", "monitor", "manual_check", "Campaigns checked by hand"),
     ("POST", r"/api/alerts/(\d+)/apply", "action", "applied", "Suggestion applied on Meta for alert #{0}"),
     ("POST", r"/api/alerts/(\d+)/(acknowledge|resolve|reopen)", "monitor", "alert", "Alert #{0}: {1}"),
@@ -229,9 +236,23 @@ class PlanRequest(BaseModel):
         if v not in NICHE_MULTIPLIERS:
             raise ValueError(f"niche must be one of {', '.join(NICHE_MULTIPLIERS)}")
         return v
+
+    @model_validator(mode="after")
+    def _other_needs_words(self):
+        if self.niche == "other" and len(self.category_note.strip()) < 3:
+            raise ValueError("For 'Other', say what the product is (for example: prayer mats, phone cases)")
+        return self
     price_usd: float = Field(gt=0, default=120)
     duration_days: int = Field(ge=3, le=90, default=30)
-    unit_cost_usd: float = Field(ge=0, default=0)   # what one jacket costs you
+    category_note: str = Field(default="", max_length=200)  # "what is it", most useful for "other"
+    brand_id: int = Field(default=0, ge=0)                    # which store (backend/brands.py)
+    # the sales brief: facts the plan may use (it never invents them)
+    offer: str = Field(default="", max_length=200)
+    usp: str = Field(default="", max_length=300)
+    delivery_days: int = Field(default=0, ge=0, le=90)
+    returns: str = Field(default="", max_length=150)
+    social_proof: str = Field(default="", max_length=200)
+    unit_cost_usd: float = Field(ge=0, default=0)   # what one item costs you
     shipping_usd: float = Field(ge=0, default=0)    # shipping + packing per order
 
 
@@ -246,6 +267,14 @@ class RuleRequest(BaseModel):
 
 # ---------- helpers ----------
 
+def _policy(p: Plan) -> list[dict]:
+    from .adpolicy import check_plan
+    try:
+        return check_plan(p.versions[-1].content if p.versions else {}, p.brief or {}, p.niche, p.product)
+    except Exception:  # a check must never stop a plan from opening
+        return []
+
+
 def _plan_out(p: Plan) -> dict:
     launches = [
         {"id": l.id, "campaign_id": l.campaign_id, "status": l.status,
@@ -257,9 +286,14 @@ def _plan_out(p: Plan) -> dict:
         "status": p.status,
         "created_at": p.created_at.isoformat(),
         "launches": launches,
+        "policy": _policy(p),
         "inputs": {
             "budget_pkr": p.budget_pkr, "country": p.country, "product": p.product,
             "niche": p.niche, "price_usd": p.price_usd, "duration_days": p.duration_days,
+            "category_note": p.category_note or "",
+            "brand_id": p.brand_id or 0,
+            **{k: (p.brief or {}).get(k, 0 if k == "delivery_days" else "")
+               for k in ("offer", "usp", "delivery_days", "returns", "social_proof")},
             "unit_cost_usd": (p.estimate or {}).get("assumptions", {}).get("unit_cost_usd", 0),
             "shipping_usd": (p.estimate or {}).get("assumptions", {}).get("shipping_usd", 0),
         },
@@ -279,6 +313,8 @@ def meta():
     return {
         "countries": {k: v["name"] for k, v in COUNTRY_BENCHMARKS.items()},
         "niches": {k: v["label"] for k, v in NICHE_MULTIPLIERS.items()},
+        "categories": [{"key": k, "label": v["label"], "group": v["group"], "typical_price": v["typical_price"]}
+                       for k, v in NICHE_MULTIPLIERS.items()],
         "default_niche": DEFAULT_NICHE,
         "pkr_per_usd": fx.pkr_per_usd(), "fx": fx.info(),
     }
@@ -286,15 +322,15 @@ def meta():
 
 def _estimate(req: PlanRequest) -> dict:
     with get_session() as s:
-        cal = outcomes.calibration_factor(s, req.country)
-    overrides = account_overrides(req.country, req.niche, req.price_usd)
+        cal = outcomes.calibration_factor(s, req.country, req.brand_id, req.niche)
+    overrides = account_overrides(req.country, req.niche, req.price_usd, req.brand_id)
     if overrides:
         cal = (1.0, 0)  # the store's own history is already real results: no second correction
     try:
         e = estimate_orders(
             req.budget_pkr, req.country, req.niche, req.price_usd, req.duration_days,
             overrides=overrides, calibration=cal,
-            unit_cost_usd=req.unit_cost_usd, shipping_usd=req.shipping_usd,
+            unit_cost_usd=req.unit_cost_usd, shipping_usd=req.shipping_usd, delivery_days=req.delivery_days,
         )
     except KeyError as ex:
         raise HTTPException(400, str(ex))
@@ -310,17 +346,28 @@ def estimate(req: PlanRequest):
 def create_plan(req: PlanRequest):
     e = _estimate(req)
 
+    from . import brands
     with get_session() as s:
-        rules = active_rules(s, req.country, req.niche, limit=15)
+        if not brands.exists(s, req.brand_id):
+            raise HTTPException(400, "That brand does not exist")
+        from .learning import active_rule_rows
+        rule_rows = active_rule_rows(s, req.country, req.niche, limit=15, brand_id=req.brand_id)
+        rules = [r.rule for r in rule_rows]
         try:
-            has_pixel = bool(settings_store.get(s, "meta_pixel_id"))
-            content = generate_plan({**req.model_dump(), "has_pixel": has_pixel}, e, rules)
+            has_pixel = bool(brands.settings_for(s, req.brand_id)["meta_pixel_id"])
+            from .meta_sync import winners_for
+            content = generate_plan({**req.model_dump(), "has_pixel": has_pixel}, e, rules, winners_for(s, req.brand_id))
         except Exception as ex:  # surfaces API/key problems to the UI
             raise HTTPException(502, f"Plan generation failed: {ex}")
 
+        # remember which rules shaped an AI plan, so approval and results credit only those
+        e = {**e, "rules_used": [] if str(content.get("summary", "")).startswith("[TEMPLATE") else [r.id for r in rule_rows]}
         p = Plan(
             budget_pkr=req.budget_pkr, country=req.country.upper(), product=req.product,
             niche=req.niche, price_usd=req.price_usd, duration_days=req.duration_days, estimate=e,
+            category_note=req.category_note.strip(), brand_id=req.brand_id,
+            brief={k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()
+                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof")},
         )
         p.versions.append(PlanVersion(version=1, source="ai", content=content))
         s.add(p)
@@ -378,10 +425,16 @@ def edit_plan(plan_id: int, req: EditRequest):
         p = s.get(Plan, plan_id)
         if not p:
             raise HTTPException(404, "Plan not found")
-        if p.status == "launched":
-            raise HTTPException(400, "Launched plans cannot be edited")
+        if p.status in ("launched", "launching"):
+            raise HTTPException(400, "Launched plans cannot be edited" if p.status == "launched"
+                                else "This plan is being launched right now; wait a moment")
         content = _validate_plan_content(req.content, p.duration_days)
         previous = p.versions[-1].content  # learn only what changed in this edit
+        try:  # compare like with like: an older version may predate fields the cleanup now adds
+            from .planner import PlanError, normalize_plan
+            previous = normalize_plan(json.loads(json.dumps(previous)), p.duration_days)
+        except PlanError:
+            pass
         p.versions.append(PlanVersion(version=len(p.versions) + 1, source="user",
                                       content=content, note=req.note))
         p.status = "draft"  # edited content must be approved again before it can launch
@@ -421,6 +474,8 @@ def delete_plan(plan_id: int):
         p = s.get(Plan, plan_id)
         if not p:
             raise HTTPException(404, "Plan not found")
+        if p.status == "launching":
+            raise HTTPException(400, "This plan is being launched right now; wait a moment")
         if p.launches or p.status == "launched":
             raise HTTPException(400, "This plan was launched on Meta, so it is kept for its results.")
         for c in s.scalars(select(Creative).where(Creative.plan_id == plan_id)):
@@ -460,6 +515,109 @@ def download_backup(name: str, request: Request):
     if not path:
         raise HTTPException(404, "Backup not found")
     return FileResponse(path, media_type="application/octet-stream", filename=name)
+
+
+# ---------- brands: one Meta connection per store ----------
+
+class BrandRequest(BaseModel):
+    values: dict[str, str]
+
+
+@app.get("/api/brands")
+def list_brands():
+    from . import brands
+    with get_session() as s:
+        return brands.all_brands(s)
+
+
+@app.get("/api/brands/{brand_id}")
+def get_brand(brand_id: int):
+    from . import brands
+    with get_session() as s:
+        if not brands.exists(s, brand_id):
+            raise HTTPException(404, "Brand not found")
+        return brands.brand_out(s, brand_id)
+
+
+@app.post("/api/brands")
+def create_brand(req: BrandRequest):
+    from . import brands
+    with get_session() as s:
+        try:
+            bid = brands.save(s, None, req.values)
+        except brands.BrandError as ex:
+            raise HTTPException(400, str(ex))
+        return brands.brand_out(s, bid)
+
+
+@app.post("/api/brands/{brand_id}")
+def update_brand(brand_id: int, req: BrandRequest):
+    from . import brands
+    with get_session() as s:
+        try:
+            brands.save(s, brand_id, req.values)
+        except brands.BrandError as ex:
+            raise HTTPException(400, str(ex))
+        return brands.brand_out(s, brand_id)
+
+
+@app.delete("/api/brands/{brand_id}")
+def delete_brand(brand_id: int):
+    from . import brands
+    with get_session() as s:
+        try:
+            brands.delete(s, brand_id)
+        except brands.BrandError as ex:
+            raise HTTPException(400, str(ex))
+        return {"ok": True}
+
+
+@app.post("/api/brands/{brand_id}/winners")
+def sync_brand_winners(brand_id: int):
+    """Read this store's ad history and keep its best ads for the planner."""
+    from . import brands
+    from .meta_sync import sync_winners
+    with get_session() as s:
+        try:
+            return sync_winners(s, brand_id)
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
+        except MetaError as ex:
+            raise HTTPException(400, str(ex))
+
+
+@app.get("/api/brands/{brand_id}/winners")
+def list_brand_winners(brand_id: int):
+    from .meta_sync import winners_for
+    with get_session() as s:
+        return winners_for(s, brand_id)
+
+
+@app.post("/api/brands/{brand_id}/check")
+def check_brand(brand_id: int):
+    """What this brand's token can see: the user, ad accounts, pages and pixels."""
+    from . import brands
+    with get_session() as s:
+        try:
+            vals = brands.settings_for(s, brand_id)
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
+    try:
+        c = MetaClient(vals["meta_access_token"])
+        out = {"user": c.me(), "accounts": c.ad_accounts(), "pages": c.pages(), "pixels": []}
+        if vals["meta_ad_account_id"]:
+            out["pixels"] = c.pixels(settings_store.ad_account_path(vals["meta_ad_account_id"]))
+        return out
+    except MetaError as ex:
+        raise HTTPException(400, str(ex))
+
+
+@app.get("/api/brief")
+def last_brief(brand_id: int = 0):
+    """The sales brief of this store's latest plan, to prefill the next one."""
+    with get_session() as s:
+        p = s.scalar(select(Plan).where(Plan.brand_id == brand_id).order_by(Plan.id.desc()).limit(1))
+        return (p.brief or {}) if p else {}
 
 
 @app.get("/api/rules")
@@ -504,7 +662,7 @@ def meta_settings():
     return {
         "settings": settings_store.masked(vals),
         "connected": bool(vals["meta_access_token"] and vals["meta_ad_account_id"]),
-        "oauth_available": bool(META_APP_ID and META_APP_SECRET),
+        "oauth_available": META_OAUTH_ENABLED,
     }
 
 
@@ -544,6 +702,11 @@ def meta_sync():
             result = sync_account(s, vals["meta_access_token"], vals["meta_ad_account_id"])
         except MetaError as ex:
             raise HTTPException(400, str(ex))
+        from .meta_sync import sync_winners
+        try:
+            result["winners"] = sync_winners(s, 0)["winners"]
+        except Exception as ex:  # the history itself synced; the best-ads list can come next time
+            result["winners_error"] = str(ex)
     return result
 
 
@@ -563,6 +726,9 @@ def meta_stats():
 
 # OAuth (optional): needs META_APP_ID / META_APP_SECRET in .env and the
 # redirect URI below whitelisted in the Meta app's Facebook Login settings.
+# Facebook login (a ~60-day user token for the main store only) is off: stores use System User
+# tokens, which never expire. META_OAUTH=1 in .env turns it back on.
+META_OAUTH_ENABLED = __import__("os").getenv("META_OAUTH", "0") == "1"
 _oauth_states: dict[str, float] = {}  # state -> created (unix seconds); valid 15 minutes
 OAUTH_REDIRECT = f"{APP_BASE_URL}/api/meta/oauth/callback"
 OAUTH_SCOPES = "ads_management,ads_read,business_management,pages_show_list,pages_read_engagement"
@@ -572,6 +738,8 @@ OAUTH_SCOPES = "ads_management,ads_read,business_management,pages_show_list,page
 def oauth_start():
     """Returns the Facebook login URL. Requires the app login, so only the owner can mint a valid
     state; the public callback then only accepts that state (prevents token substitution)."""
+    if not META_OAUTH_ENABLED:
+        raise HTTPException(404, "Facebook login is turned off: paste a System User token on the Connections page.")
     if not (META_APP_ID and META_APP_SECRET):
         raise HTTPException(400, "META_APP_ID / META_APP_SECRET not set in .env; paste a token instead.")
     import time
@@ -645,26 +813,39 @@ def launch(plan_id: int):
         if claimed != 1:
             raise HTTPException(409, "This plan is already being launched.")
         s.refresh(p)
-        vals = settings_store.get_all(s)
+        from . import brands
+        try:
+            vals = brands.settings_for(s, p.brand_id)
+        except brands.BrandError as ex:
+            p.status = "approved"
+            s.commit()
+            raise HTTPException(400, str(ex))
         inputs = {"budget_pkr": p.budget_pkr, "country": p.country, "product": p.product,
                   "niche": p.niche, "price_usd": p.price_usd, "duration_days": p.duration_days}
+        content = json.loads(json.dumps(p.versions[-1].content))  # exactly the approved version
         try:
             # Upload the plan's selected creatives to Meta first (once each), then launch with their hashes.
             selected = s.scalars(select(Creative).where(Creative.plan_id == p.id, Creative.selected == 1)
                                  .order_by(Creative.creative_index, Creative.id)).all()
             creative_images = []
+            # a restricted account is never touched: not even an image upload
+            from .adpolicy import account_problem
+            pre = MetaClient(vals["meta_access_token"])
+            if problem := account_problem(pre.account(settings_store.ad_account_path(vals["meta_ad_account_id"]))):
+                raise MetaError(problem)
             if selected:
-                client = MetaClient(vals["meta_access_token"])
+                client = pre
                 act = settings_store.ad_account_path(vals["meta_ad_account_id"])
                 for c in selected:
-                    if not c.meta_image_hash:
+                    if not c.meta_image_hash or (c.meta_image_account or "") != act:
                         c.meta_image_hash = client.upload_image_bytes(act, (MEDIA_DIR / c.file_name).read_bytes(), c.file_name)
+                        c.meta_image_account = act
                         s.commit()
                     creative_images.append({"creative_index": c.creative_index, "image_hash": c.meta_image_hash})
-            def save_audiences(aud: dict) -> None:  # reuse these on the next launch
+            def save_audiences(aud: dict) -> None:  # reuse these on the next launch of this store
                 with get_session() as s2:
-                    settings_store.set_many(s2, {f"aud_{k}": aud.get(k, "") for k in ("pixel", "visitors", "buyers")})
-            result = launch_plan(inputs, p.versions[-1].content, vals, p.id, creative_images, save_audiences)
+                    brands.set_audiences(s2, p.brand_id, aud)
+            result = launch_plan(inputs, content, vals, p.id, creative_images, save_audiences)
         except Exception as ex:
             s.rollback()
             p.status = "approved"  # release the claim so the user can try again
@@ -673,7 +854,7 @@ def launch(plan_id: int):
                 raise HTTPException(400, str(ex))
             raise
         try:
-            s.add(Launch(plan_id=p.id, campaign_id=result["campaign_id"], objects=result))
+            s.add(Launch(plan_id=p.id, campaign_id=result["campaign_id"], objects={**result, "brand_id": p.brand_id}))
             p.status = "launched"
             s.commit()
         except Exception:
@@ -681,7 +862,7 @@ def launch(plan_id: int):
             # an unmonitored campaign behind
             s.rollback()
             try:
-                MetaClient(vals["meta_access_token"]).update_object(result["campaign_id"], status="DELETED")
+                MetaClient(vals["meta_access_token"]).delete_now(result["campaign_id"])
             except MetaError:
                 pass
             p.status = "approved"
@@ -750,12 +931,29 @@ class ApplyRequest(BaseModel):
     option_index: int
 
 
-def _client_from_settings(s) -> MetaClient:
-    vals = settings_store.get_all(s)
+def _client_for_launch(s, launch_id: int | None) -> MetaClient:
+    """The Meta connection of the store this launch belongs to."""
+    from . import brands
+    launch = s.get(Launch, launch_id) if launch_id else None
     try:
+        vals = brands.settings_for(s, brands.launch_brand(s, launch) if launch else 0)
         return MetaClient(vals["meta_access_token"])
+    except (MetaError, brands.BrandError) as ex:
+        raise HTTPException(400, str(ex))
+
+
+def _check_account(client: MetaClient, launch: Launch) -> None:
+    """A restricted ad account is never changed, not even by a click."""
+    from .adpolicy import account_problem
+    act = (launch.objects or {}).get("account")
+    if not act:
+        return
+    try:
+        problem = account_problem(client.account(act))
     except MetaError as ex:
         raise HTTPException(400, str(ex))
+    if problem:
+        raise HTTPException(400, problem)
 
 
 def _log_out(l: ActionLog, oc: ActionOutcome | None = None) -> dict:
@@ -775,7 +973,13 @@ def alert_apply(alert_id: int, req: ApplyRequest):
         opts = [o for o in a.suggestions if o.get("action")]
         if not 0 <= req.option_index < len(opts) or not opts[req.option_index].get("spec"):
             raise HTTPException(400, "This option cannot be executed automatically; do it in Ads Manager.")
-        client = _client_from_settings(s)
+        if a.status == "resolved":
+            raise HTTPException(400, "This alert is resolved; its suggestion no longer applies.")
+        launch = s.get(Launch, a.launch_id)
+        if not launch or launch.status in ("completed", "archived", "deleted"):
+            raise HTTPException(400, "This campaign is closed in the app; change it in Ads Manager if needed.")
+        client = _client_for_launch(s, a.launch_id)
+        _check_account(client, launch)
         log = actions.execute(s, client, opts[req.option_index]["spec"], "manual", alert_id=a.id, launch_id=a.launch_id)
         if not log.ok:
             raise HTTPException(400, log.error)
@@ -802,10 +1006,23 @@ def list_outcomes():
         return {
             "launches": [{**_po_out(po), "product": plans[po.plan_id].product if po.plan_id in plans else "",
                           "country": plans[po.plan_id].country if po.plan_id in plans else ""} for po in pos],
-            "calibration": [{"country": c.country, "name": COUNTRY_BENCHMARKS.get(c.country, {}).get("name", c.country),
+            "calibration": [{"country": c.country, "name": _cal_name(s, c.country),
                              "factor": c.factor, "samples": c.samples, "updated_at": c.updated_at.isoformat()} for c in cals],
             "action_stats": outcomes.action_stats(s),
         }
+
+
+def _cal_name(s, key: str) -> str:
+    """'US' -> 'United States'; 'PK|2|kitchen_cutlery' -> 'Pakistan · Kitchen, cutlery & dining · Cutlery Nest'."""
+    from . import brands
+    from .benchmarks import get_category
+    parts = key.split("|")
+    name = COUNTRY_BENCHMARKS.get(parts[0], {}).get("name", parts[0])
+    if len(parts) == 3:
+        bid = int(parts[1]) if parts[1].isdigit() else 0
+        store = next((b["name"] for b in brands.all_brands(s) if b["id"] == bid), f"store {bid}")
+        name += f" · {get_category(parts[2])['label']} · {store}"
+    return name
 
 
 @app.post("/api/launches/{launch_id}/complete")
@@ -834,7 +1051,10 @@ def action_undo(log_id: int):
         log = s.get(ActionLog, log_id)
         if not log:
             raise HTTPException(404, "Action not found")
-        client = _client_from_settings(s)
+        client = _client_for_launch(s, log.launch_id)
+        launch = s.get(Launch, log.launch_id) if log.launch_id else None
+        if launch:
+            _check_account(client, launch)
         try:
             rev = actions.undo(s, client, log)
         except MetaError as ex:
@@ -885,10 +1105,22 @@ class GenerateRequest(BaseModel):
     aspect: str | None = None  # 1:1 | 9:16 | 4:5 (default from the creative's format)
 
 
+def _brand_vals(s, brand_id: int) -> dict:
+    from . import brands
+    try:
+        return brands.settings_for(s, brand_id)
+    except brands.BrandError as ex:
+        raise HTTPException(404, str(ex))
+
+
 @app.get("/api/creatives/status")
-def creatives_status():
+def creatives_status(brand_id: int = 0):
+    from . import brands
     with get_session() as s:
-        vals = settings_store.get_all(s)
+        try:
+            vals = brands.settings_for(s, brand_id)
+        except brands.BrandError:
+            vals = {}  # the plan's store was deleted: show an empty photo box instead of failing the panel
     st = imagegen.status()
     st["product_photo"] = f"/media/{vals['product_photo']}" if vals.get("product_photo") else ""
     st["brand_style"] = vals.get("brand_style", "")
@@ -896,18 +1128,24 @@ def creatives_status():
 
 
 @app.post("/api/creatives/product-photo")
-async def upload_product_photo(file: UploadFile = File(...)):
+async def upload_product_photo(file: UploadFile = File(...), brand_id: int = 0):
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Image too large (max 15 MB)")
     ext = creatives.image_kind(data)
     if not ext:
         raise HTTPException(400, "Use a PNG, JPG or WEBP image")
+    from . import brands
+    with get_session() as s:
+        old = _brand_vals(s, brand_id).get("product_photo")  # 404 before anything is written
     name = f"product_{secrets.token_urlsafe(16)}.{ext}"
     (MEDIA_DIR / name).write_bytes(data)
     with get_session() as s:
-        old = settings_store.get(s, "product_photo")
-        settings_store.set_many(s, {"product_photo": name})
+        try:
+            brands.set_fields(s, brand_id, {"product_photo": name})
+        except brands.BrandError as ex:
+            creatives.delete_file(name)
+            raise HTTPException(404, str(ex))
         if old:
             creatives.delete_file(old)
     return {"product_photo": f"/media/{name}"}
@@ -918,9 +1156,13 @@ class BrandStyleRequest(BaseModel):
 
 
 @app.post("/api/creatives/brand-style")
-def set_brand_style(req: BrandStyleRequest):
+def set_brand_style(req: BrandStyleRequest, brand_id: int = 0):
+    from . import brands
     with get_session() as s:
-        settings_store.set_many(s, {"brand_style": req.brand_style})
+        try:
+            brands.set_fields(s, brand_id, {"brand_style": req.brand_style})
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
     return {"ok": True}
 
 

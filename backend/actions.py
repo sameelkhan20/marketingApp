@@ -22,7 +22,7 @@ from .settings_store import ad_account_path
 from .benchmarks import get_country
 from . import fx
 from .db import ActionLog, Alert, Launch, Plan
-from .meta_client import MetaClient, MetaError, budget_minor_units
+from .meta_client import MetaClient, MetaError, MetaRateLimited, budget_minor_units
 
 DEFAULT_MAX_PCT = 20.0
 AUTOMATABLE_KINDS = ["rebalance", "no_purchases", "high_cpa", "low_ctr", "high_frequency", "low_roas", "scale_candidate",
@@ -160,6 +160,10 @@ def execute(session: Session, client: MetaClient, spec: dict, mode: str,
         log.after = {"created_ads": ex.created}
         log.ok, log.error = (1 if ex.created else 0), str(ex.cause)
         log.description += f" -> {len(ex.created)} ad(s) created before an error"
+    except MetaRateLimited as ex:
+        if mode == "auto":
+            raise  # not a failed try: automation stops for this run and tries again after the pause
+        log.ok, log.error = 0, str(ex)
     except MetaError as ex:
         log.ok, log.error = 0, str(ex)
     except Exception as ex:  # never let an unexpected error lose the log
@@ -200,8 +204,9 @@ def _sibling_budgets(client: MetaClient, launch_id: int | None, object_id: str, 
         if a.get("id") and a["id"] != object_id:
             try:
                 obj = client.get_object(a["id"], "adset")
-            except MetaError:
-                continue
+            except MetaError as ex:
+                raise MetaError(f"Could not read ad set {a['id']} to check the campaign's total budget ({ex}); "
+                                "no budget was raised.") from None
             if obj.get("status") != "PAUSED":
                 total += int(obj.get("daily_budget") or 0)
     return total
@@ -227,7 +232,8 @@ def _record_ads(session: Session, launch: Launch, new_ads: list[dict]) -> None:
 
 def _clone_winner(session: Session, client: MetaClient, spec: dict, launch_id: int | None) -> list[dict]:
     launch, plan, ad = _launch_and_ad(session, launch_id, spec["object_id"])
-    act = launch.objects.get("account") or ad_account_path(settings_store.get(session, "meta_ad_account_id"))
+    from . import brands
+    act = launch.objects.get("account") or ad_account_path(brands.settings_for(session, plan.brand_id)["meta_ad_account_id"])
     existing = {(a.get("adset_id"), a.get("creative_id")) for a in launch.objects.get("ads", [])}
     created = []
     try:
@@ -259,7 +265,8 @@ def _refresh_creative(session: Session, client: MetaClient, spec: dict, launch_i
     launch, plan, ad = _launch_and_ad(session, launch_id, spec["object_id"])
     if not imagegen.status()["configured"]:
         raise MetaError("Image generation is not configured (IMAGE_PROVIDER in .env).")
-    vals = settings_store.get_all(session)
+    from . import brands
+    vals = brands.settings_for(session, plan.brand_id)
     if not vals["meta_page_id"] or not vals["store_url"]:
         raise MetaError("Page id and store URL are needed to create an ad.")
     act = launch.objects.get("account") or ad_account_path(vals["meta_ad_account_id"])
@@ -294,8 +301,14 @@ def _move_budget(session: Session, client: MetaClient, spec: dict, launch_id: in
     Clamped by the max-change setting and Meta's minimum daily budget."""
     if not spec.get("to") or spec["to"] == spec["object_id"]:
         raise MetaError("No destination ad set for the budget.")
+    from .meta_client import paused
+    if paused()[0]:
+        raise MetaRateLimited(paused()[1])
     src = client.get_object(spec["object_id"], "adset")
     dst = client.get_object(spec["to"], "adset")
+    if (dst.get("status") or "ACTIVE") != "ACTIVE":
+        raise MetaError(f"The receiving ad set {spec['to']} is {str(dst.get('status')).lower()}: budget is not moved "
+                        "into an ad set that does not spend.")
     s_cur, d_cur = int(src.get("daily_budget") or 0), int(dst.get("daily_budget") or 0)
     if s_cur <= 0 or d_cur <= 0:
         raise MetaError("Both ad sets need their own daily budget (campaign budget optimisation is on?).")
@@ -309,8 +322,9 @@ def _move_budget(session: Session, client: MetaClient, spec: dict, launch_id: in
     try:
         client.update_object(spec["to"], daily_budget=d_cur + amount)
     except MetaError as ex:
-        try:
-            client.update_object(spec["object_id"], daily_budget=s_cur)  # put the money back: never lose budget
+        try:  # put the money back: never lose budget (goes out even if a pause just started)
+            (client.restore_now if hasattr(client, "restore_now") else client.update_object)(
+                spec["object_id"], daily_budget=s_cur)
         except MetaError as ex2:
             raise MetaError(f"{ex}. Putting the budget back also failed ({ex2}): set ad set {spec['object_id']} "
                             f"to {s_cur} minor units in Ads Manager.") from None
@@ -347,8 +361,12 @@ def undo(session: Session, client: MetaClient, log: ActionLog) -> ActionLog:
                         before=log.after, after=log.before, description=f"Undo: {log.description}")
         session.add(rev)
         try:
+            from .meta_client import paused
+            if paused()[0]:
+                raise MetaRateLimited(paused()[1])
             client.update_object(log.spec["to"], daily_budget=int(log.before["to_budget"]))
-            client.update_object(log.spec["object_id"], daily_budget=int(log.before["daily_budget"]))
+            (client.restore_now if hasattr(client, "restore_now") else client.update_object)(
+                log.spec["object_id"], daily_budget=int(log.before["daily_budget"]))
             log.undone, rev.ok = 1, 1
         except MetaError as ex:
             rev.ok, rev.error = 0, str(ex)
@@ -460,5 +478,9 @@ def auto_apply(session: Session, client: MetaClient, alerts: list[Alert]) -> lis
         if targets & touched or any(_recently_changed(session, t) for t in targets):
             continue
         touched |= targets
-        logs.append(execute(session, client, spec, "auto", alert_id=a.id, launch_id=a.launch_id))
+        try:
+            logs.append(execute(session, client, spec, "auto", alert_id=a.id, launch_id=a.launch_id))
+        except MetaRateLimited:
+            session.rollback()
+            break  # Meta asked to slow down: stop here, nothing counted as a failure
     return logs

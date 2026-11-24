@@ -18,7 +18,8 @@ META_KEYS = [
     "product_photo",       # file name in data/media used as the reference for AI creatives
     "brand_style",         # free text: colours, vibe, what to avoid (fed into image prompts)
     "last_digest_at",      # ISO date of the last weekly digest email
-    "aud_pixel", "aud_visitors", "aud_buyers",  # retargeting audiences created on Meta, reused per pixel
+    "aud_pixel", "aud_visitors", "aud_buyers", "aud_account",  # retargeting audiences, reused per pixel + account
+    "winners",             # JSON: the main store's best past ads (backend/meta_sync.py), fed to the planner
 ]
 
 SECRET_KEYS = {"meta_access_token"}

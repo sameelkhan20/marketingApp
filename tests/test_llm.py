@@ -98,9 +98,37 @@ def test_plan_uses_gemini_answer(gemini):
     fake_plan["summary"] = "from gemini"
     broken = json.loads(json.dumps(fake_plan))
     del broken["ad_sets"][0]["daily_budget_pct"]
-    calls = gemini(_gemini_reply(broken), _gemini_reply(fake_plan))
-    assert planner.generate_plan(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])["summary"] == "from gemini"
-    assert len(calls) == 2  # a nested field was missing the first time, so it asked again
+    reviewed = json.loads(json.dumps(fake_plan))
+    reviewed["summary"] = "reviewed"
+    reviewed["risks"] = reviewed["risks"] + ["Review: merged ad sets for the small budget"]
+    calls = gemini(_gemini_reply(broken), _gemini_reply(fake_plan), _gemini_reply(reviewed))
+    out = planner.generate_plan(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])
+    assert out["summary"] == "reviewed" and any(r.startswith("Review:") for r in out["risks"])
+    assert len(calls) == 3  # draft (asked twice: a nested field was missing), then the review
+    assert all("gemini-pro-latest" in c["url"] for c in calls)  # plans use the stronger model
+    assert "REVIEW" in calls[2]["json"]["systemInstruction"]["parts"][0]["text"].upper()
+
+
+def test_review_failure_keeps_the_draft(gemini):
+    inputs = {"budget_pkr": 100000, "country": "US", "product": "Jacket", "niche": "leather_jackets",
+              "price_usd": 120, "duration_days": 30, "offer": "Free shipping"}
+    draft = planner._template_plan(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])
+    draft["summary"] = "draft"
+    gemini(_gemini_reply(draft), _Resp(500, {"error": {"message": "busy"}}))
+    out = planner.generate_plan(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])
+    assert out["summary"] == "draft" and any("Review step skipped" in r for r in out["risks"])
+
+
+def test_brief_reaches_the_prompt_and_is_not_invented():
+    inputs = {"budget_pkr": 100000, "country": "US", "product": "Jacket", "niche": "leather_jackets",
+              "price_usd": 120, "duration_days": 30, "offer": "20% off this week", "delivery_days": 9}
+    text = planner._user_prompt(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])
+    assert "Offer: 20% off this week" in text and "Delivery time (days): 9" in text
+    empty = planner._user_prompt({**inputs, "offer": "", "delivery_days": 0}, estimate_to_dict(estimate_orders(100000, "US")), [])
+    assert "do not promise discounts" in empty
+    plan = planner._template_plan(inputs, estimate_to_dict(estimate_orders(100000, "US")), [])
+    assert plan["creatives"][0]["angle"] == "offer" and "20% off this week" in plan["creatives"][0]["hook"]
+    assert len({c["angle"] for c in plan["creatives"]}) == len(plan["creatives"])
 
 
 def test_missing_checks_nested():

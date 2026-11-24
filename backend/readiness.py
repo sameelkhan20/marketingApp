@@ -12,7 +12,11 @@ from .settings_store import ad_account_path
 
 
 def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
-    vals = settings_store.get_all(session)
+    from . import brands
+    try:
+        vals = brands.settings_for(session, plan.brand_id)
+    except brands.BrandError as ex:
+        return {"ready": False, "checks": [{"key": "brand", "ok": False, "hard": True, "text": str(ex)}]}
     checks: list[dict] = []
 
     def add(key, ok, text, hard=True):
@@ -32,9 +36,10 @@ def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
             me = c.me()
             info = c.account(ad_account_path(account))
             currency = info.get("currency")
-            status_ok = info.get("account_status") in (1, "1", None)
-            add("meta_live", True, f"Token valid ({me.get('name', '')}); account '{info.get('name', '')}' in {currency}"
-                + ("" if status_ok else f", status {info.get('account_status')} (check billing)"))
+            from .adpolicy import account_problem
+            problem = account_problem(info)
+            add("meta_live", True, f"Token valid ({me.get('name', '')}); account '{info.get('name', '')}' in {currency}")
+            add("account_status", not problem, problem or "Ad account is active")
             add("currency", currency in ("USD", "PKR"), f"Account currency {currency} supported" if currency in ("USD", "PKR")
                 else f"Account currency {currency} not supported for budgets (USD or PKR only)")
         except MetaError as ex:
@@ -66,15 +71,38 @@ def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
             add("images", False, f"Creatives {missing} have no image and will be skipped", hard=False)
     else:
         add("images", False, "No ad images: generate/upload on the plan or set image URLs; ads will be skipped", hard=False)
+    from .adpolicy import check_plan as policy_check
+    for f in policy_check(content, plan.brief or {}, plan.niche, plan.product):
+        add("policy", False, f"Meta policy, {f['where']}: {f['text']}", hard=f["level"] == "block")
+    per_slot: dict[int, int] = {}
+    for c in selected:
+        per_slot[c.creative_index] = per_slot.get(c.creative_index, 0) + 1
+    thin = [i + 1 for i, cr in enumerate(content.get("creatives", []))
+            if "carousel" in str(cr.get("format", "")).lower() and 0 < per_slot.get(i, 0) < 2]
+    many = [i + 1 for i, cr in enumerate(content.get("creatives", []))
+            if "carousel" in str(cr.get("format", "")).lower() and per_slot.get(i, 0) > 10]
+    if many:
+        add("carousel_max", False, f"Carousel creative(s) {many} have more than 10 images marked Use: only the first 10 "
+                                   "become cards. Unmark the extra ones", hard=False)
+    if thin:
+        add("carousel", False, f"Carousel creative(s) {thin} have only one image marked Use: they will run as a single "
+                               "image. Add or mark at least 2", hard=False)
 
     try:
         cmin = get_country(plan.country)["min_daily_usd"]
     except KeyError:
         cmin = 5
     daily_total = plan.budget_pkr / fx.pkr_per_usd() / max(plan.duration_days, 1)  # launch uses today's rate
-    low = [a["name"] for a in content.get("ad_sets", []) if daily_total * float(a.get("daily_budget_pct", 0)) / 100 < cmin]
-    add("budget", not low, f"Daily budget ${daily_total:.2f} split across {len(content.get('ad_sets', []))} ad sets"
-        if not low else f"Ad sets below Meta's ~${cmin}/day minimum: {', '.join(low)}. Raise the budget, shorten the duration or merge ad sets.")
+    from .budget_fit import fit_ad_sets
+    sets, folded = fit_ad_sets(content.get("ad_sets", []), daily_total, cmin)
+    if daily_total < cmin:
+        add("budget", False, f"Daily budget ${daily_total:.2f} is below Meta's ~${cmin}/day minimum for even one ad set. "
+                             "Raise the budget or shorten the duration.")
+    elif folded:
+        add("budget", False, f"{', '.join(folded)} would get less than Meta's ~${cmin}/day: it is merged into the "
+                             f"largest ad set at launch ({len(sets)} ad set(s) run)", hard=False)
+    else:
+        add("budget", True, f"Daily budget ${daily_total:.2f} split across {len(sets)} ad sets")
 
     add("visual_prompts", all(c.get("visual_prompt") for c in content.get("creatives", [])),
         "Creatives have visual prompts for AI images" if all(c.get("visual_prompt") for c in content.get("creatives", []))

@@ -13,7 +13,7 @@ import re
 import time
 
 from . import fx
-from .meta_client import MetaClient, MetaError, budget_minor_units
+from .meta_client import MetaRateLimited, MetaClient, MetaError, budget_minor_units
 from .settings_store import ad_account_path
 
 CTA_MAP = {"shop now": "SHOP_NOW", "learn more": "LEARN_MORE", "buy now": "BUY_NOW",
@@ -68,7 +68,8 @@ def ensure_audiences(client, act: str, pixel: str, cached: dict) -> tuple[dict, 
     Reuses ids created earlier for the same pixel. Returns (ids, note)."""
     if not pixel:
         return {}, "No pixel: retargeting and buyer exclusion are off."
-    have = dict(cached) if cached.get("pixel") == pixel else {}
+    # reuse only what was made for this pixel on this very ad account
+    have = dict(cached) if cached.get("pixel") == pixel and cached.get("account") == act else {}
     for k in ("visitors", "buyers"):  # still there? (it may have been deleted in Ads Manager)
         if have.get(k) and hasattr(client, "get"):
             try:
@@ -79,12 +80,12 @@ def ensure_audiences(client, act: str, pixel: str, cached: dict) -> tuple[dict, 
                     have[k] = ""  # deleted in Ads Manager: make a new one
                 # anything else (network, rate limit): keep the id and try it
     if have.get("visitors") and have.get("buyers"):
-        return {"pixel": pixel, "visitors": have["visitors"], "buyers": have["buyers"]}, ""
+        return {"pixel": pixel, "account": act, "visitors": have["visitors"], "buyers": have["buyers"]}, ""
     def rule(days: int, flt: dict) -> dict:
         return {"inclusions": {"operator": "or", "rules": [{
             "event_sources": [{"id": pixel, "type": "pixel"}], "retention_seconds": days * 86400,
             "filter": {"operator": "and", "filters": [flt]}}]}}
-    out = {"pixel": pixel, "visitors": have.get("visitors", ""), "buyers": have.get("buyers", "")}
+    out = {"pixel": pixel, "account": act, "visitors": have.get("visitors", ""), "buyers": have.get("buyers", "")}
     try:
         if not out["visitors"]:
             out["visitors"] = client.create_custom_audience(
@@ -104,6 +105,11 @@ def ensure_audiences(client, act: str, pixel: str, cached: dict) -> tuple[dict, 
     return out,         "Created the retargeting audiences (store visitors 30 days, buyers 180 days)."
 
 
+def _note_once(notes: list[str], text: str) -> None:
+    if text not in notes:
+        notes.append(text)
+
+
 def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: int,
                 creative_images: list[dict] | None = None, save_audiences=None) -> dict:
     """creative_images: [{creative_index, image_hash}] from the plan's selected app creatives.
@@ -116,7 +122,11 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
 
     client = MetaClient(token)
     act = ad_account_path(account_id)
-    currency = client.account(act).get("currency", "USD")
+    info = client.account(act)
+    from .adpolicy import account_problem
+    if problem := account_problem(info):
+        raise MetaError(problem)
+    currency = info.get("currency", "USD")
 
     # Budget: plan is in PKR; convert to the account currency.
     total_pkr = plan_inputs["budget_pkr"]
@@ -138,7 +148,7 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
 
     plan_adsets = list(plan_content.get("ad_sets", []))
     notes: list[str] = []
-    cached = {k: settings.get(f"aud_{k}", "") for k in ("pixel", "visitors", "buyers")}
+    cached = {k: settings.get(f"aud_{k}", "") for k in ("pixel", "account", "visitors", "buyers")}
     audiences, aud_note = ensure_audiences(client, act, settings.get("meta_pixel_id", ""), cached)
     if audiences and save_audiences:
         save_audiences(audiences)  # saved now: a later failure must not lose audiences that exist on Meta
@@ -151,6 +161,15 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
             notes.append(f"Skipped ad set {', '.join(dropped)}: no retargeting audience; its budget went to the others.")
     if not plan_adsets:
         raise MetaError("The plan has no ad sets.")
+    from .benchmarks import get_country
+    from .budget_fit import fit_ad_sets
+    try:
+        cmin_usd = get_country(country)["min_daily_usd"]
+    except KeyError:
+        cmin_usd = 5
+    plan_adsets, folded = fit_ad_sets(plan_adsets, daily_total, cmin_usd * (PKR_PER_USD if currency == "PKR" else 1.0))
+    if folded:
+        notes.append(f"{', '.join(folded)} got less than Meta's minimum daily budget, so it was merged into the largest ad set.")
     # Shares written by the model may not add up to 100; normalise so the daily total matches the plan.
     shares = [max(float(a.get("daily_budget_pct", 0) or 0), 0.0) for a in plan_adsets]
     share_total = sum(shares) or float(len(shares))
@@ -187,7 +206,8 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
     except MetaError as ex:
         # Do not leave a half-built campaign behind; the user will retry the launch.
         try:
-            client.update_object(campaign_id, status="DELETED")
+            client.delete_now(campaign_id) if hasattr(client, "delete_now") else \
+                client.update_object(campaign_id, status="DELETED")
             cleanup = "the partial campaign was deleted"
         except MetaError:
             cleanup = f"delete campaign {campaign_id} manually in Ads Manager"
@@ -212,8 +232,26 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
                     "name": cr.get("headline", product),
                     "call_to_action": {"type": cta, "value": {"link": link}},
                 }
-                if hashes.get(j):
+                carousel = "carousel" in str(cr.get("format", "")).lower()
+                if carousel and (len(hashes.get(j, [])) >= 2 or (not hashes.get(j) and len(images) >= 2)):
+                    # one ad, 2-10 cards: each selected image (in order) is a card linking to the store
+                    cards = [{"image_hash": h} for h in hashes.get(j, [])[:10]] or \
+                            [{"picture": u} for u in images[:10]]
+                    for c in cards:
+                        c.update({"link": link, "name": cr.get("headline", product),
+                                  "call_to_action": {"type": cta, "value": {"link": link}}})
+                    link_data["child_attachments"] = cards
+                    link_data.pop("name", None)  # each card carries the headline
+                    link_data["multi_share_optimized"] = True   # Meta may order the cards by performance
+                    link_data["multi_share_end_card"] = False
+                    if len(hashes.get(j, [])) > 10:
+                        _note_once(notes, f"Creative {j + 1}: only the first 10 of {len(hashes[j])} images became cards "
+                                          "(Meta allows 10).")
+                elif hashes.get(j):
                     link_data["image_hash"] = hashes[j][0]
+                    if carousel:
+                        _note_once(notes, f"Creative {j + 1} is a carousel with one image: it ran as a single image. "
+                                          "Add at least 2 images to make it a carousel.")
                 elif images:
                     link_data["picture"] = images[j % len(images)]
                 else:
@@ -228,6 +266,16 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
                     ad_id = client.create_ad(act, f"{adset['name']} - C{j + 1}", adset["id"], creative_id)
                     ads.append({"id": ad_id, "adset_id": adset["id"], "creative_id": creative_id,
                                 "creative_index": j, "name": f"{adset['name']} - C{j + 1}"})
+                except MetaRateLimited:
+                    # half a campaign is worse than none: remove it so the plan can be launched again
+                    try:
+                        client.delete_now(campaign_id) if hasattr(client, "delete_now") else \
+                            client.update_object(campaign_id, status="DELETED")
+                        cleanup = "the half-built campaign was deleted"
+                    except MetaError:
+                        cleanup = f"delete campaign {campaign_id} in Ads Manager"
+                    raise MetaError(f"Meta asked the app to slow down while creating ads; {cleanup}. "
+                                    "Launch again after the pause.")
                 except MetaError as ex:
                     notes.append(f"Ad {j + 1} in '{adset['name']}' failed: {ex}")
 

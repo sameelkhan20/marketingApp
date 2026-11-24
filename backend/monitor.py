@@ -17,7 +17,8 @@ from . import settings_store
 from . import fx
 from .config import MONITOR_INTERVAL_HOURS
 from .db import Alert, Launch, MetricSnapshot, Plan, get_session
-from .meta_client import MetaClient, MetaError
+from .meta_client import paused as meta_paused
+from .meta_client import MetaRateLimited, MetaClient, MetaError
 from .actions import auto_apply, concretize
 from .notify import send_alert_email, send_digest, status as notify_status
 from .outcomes import evaluate_action_outcomes, update_plan_outcome
@@ -74,7 +75,10 @@ def check_launch(session: Session, client: MetaClient, launch: Launch, currency:
     except Exception as ex:
         log.warning("lifetime insights failed for launch %s: %s", launch.id, ex)
         lifetime = None
+    was_active = bool((launch.objects or {}).get("activated_at"))
     days_active = _days_active(launch, camp, lifetime, now)
+    if not was_active and (launch.objects or {}).get("activated_at"):
+        _restart_clock(client, launch, plan)
     daily_usd = plan.budget_pkr / fx.launch_rate(launch, plan) / max(plan.duration_days, 1)
 
     findings = evaluate(metrics, targets, daily_usd, days_active, camp.get("effective_status", ""), ads)
@@ -104,7 +108,11 @@ INACTIVE_LAUNCH = ("archived", "completed", "deleted")
 def _tracking_findings(session: Session, client, launch: Launch, metrics: list[dict], status: str) -> list[dict]:
     """Pixel problems as campaign-level findings (only while the campaign runs)."""
     from .tracking import problems
-    pixel = settings_store.get(session, "meta_pixel_id")
+    from . import brands
+    try:
+        pixel = brands.settings_for(session, brands.launch_brand(session, launch))["meta_pixel_id"]
+    except brands.BrandError:
+        return None
     if not pixel or status not in ("ACTIVE", "IN_PROCESS", "WITH_ISSUES") or not hasattr(client, "pixel_health"):
         return []
     try:
@@ -120,6 +128,22 @@ def _tracking_findings(session: Session, client, launch: Launch, metrics: list[d
                     "object_id": f"{launch.campaign_id}#pixel-{key}", "object_name": "Pixel", "message": p["text"],
                     "metrics": {"events_7d": health.get("counts", {})}})
     return out
+
+
+def _restart_clock(client, launch: Launch, plan: Plan) -> None:
+    """Ad sets were given an end date at creation, but campaigns start paused: when the owner switches
+    the campaign on, the plan's days start then, so move the end date once."""
+    import time as _time
+    end = int(_time.time()) + plan.duration_days * 86400
+    for a in (launch.objects or {}).get("adsets", []):
+        try:
+            client.update_object(a["id"], end_time=end)
+        except MetaError as ex:
+            log.warning("could not move the end date of ad set %s: %s", a.get("id"), ex)
+            return
+    objs = dict(launch.objects or {})
+    objs["ends_at"] = end
+    launch.objects = objs
 
 
 def _days_active(launch: Launch, camp: dict, lifetime: dict | None, now: datetime) -> int:
@@ -153,6 +177,13 @@ def _upsert_alerts(session: Session, launch: Launch, plan_id: int, findings: lis
         if fp in open_alerts:
             a = open_alerts[fp]
             a.message, a.metrics, a.severity = f["message"], f["metrics"], f["severity"]
+            to = (f.get("metrics") or {}).get("to_id")
+            if to and any((o.get("spec") or {}).get("type") == "move_budget" for o in a.suggestions or []):
+                opts = [dict(o) for o in a.suggestions]
+                for o in opts:  # the receiving ad set is today's best one, not the first run's
+                    if (o.get("spec") or {}).get("type") == "move_budget":
+                        o["spec"] = {**o["spec"], "to": to}
+                a.suggestions = opts
             a.updated_at = datetime.utcnow()
             a.times_seen += 1
         else:
@@ -270,7 +301,7 @@ def _enrich_plan_alerts(session: Session, alert_ids: list[int]) -> None:
     )
     from . import llm
     try:
-        data = llm.structured("You are an experienced Meta Ads media buyer for a jackets store.", prompt,
+        data = llm.structured("You are an experienced Meta Ads media buyer for an online store.", prompt,
                               SUGGESTION_SCHEMA, "Alert advice", effort="medium", max_tokens=8000)
     except Exception as ex:  # keep template suggestions on any failure (budget, network, bad answer)
         log.warning("AI enrichment failed: %s", ex)
@@ -313,16 +344,31 @@ def run_once() -> dict:
     result: dict = {"checked": [], "errors": []}
     try:
         with get_session() as s:
-            vals = settings_store.get_all(s)
+            from . import brands
             launches = s.scalars(select(Launch).where(Launch.status.not_in(INACTIVE_LAUNCH))).all()
             if not launches:
                 result["note"] = "No launched campaigns to monitor."
                 return result
-            try:
-                client = MetaClient(vals["meta_access_token"])
-                currency = client.account(ad_account_path(vals["meta_ad_account_id"])).get("currency", "USD")
-            except MetaError as ex:
-                result["errors"].append(str(ex))
+            # each store's campaigns are read with that store's own Meta connection
+            groups: dict[int, list[Launch]] = {}
+            for l in launches:
+                groups.setdefault(brands.launch_brand(s, l), []).append(l)
+            conns: dict[int, tuple] = {}
+            frozen: set[int] = set()  # stores whose ad account Meta has restricted: no automatic changes
+            for bid in groups:
+                try:
+                    bvals = brands.settings_for(s, bid)
+                    c = MetaClient(bvals["meta_access_token"])
+                    info = c.account(ad_account_path(bvals["meta_ad_account_id"]))
+                    cur = info.get("currency", "USD")
+                    conns[bid] = (c, cur, ad_account_path(bvals["meta_ad_account_id"]))
+                    from .adpolicy import account_problem
+                    if problem := account_problem(info):
+                        frozen.add(bid)
+                        result["errors"].append(f"{'main store' if not bid else f'brand {bid}'}: {problem}")
+                except (MetaError, brands.BrandError) as ex:
+                    result["errors"].append(f"{'main store' if not bid else f'brand {bid}'}: {ex}")
+            if not conns:
                 return result
             new_ids: list[int] = []
             try:
@@ -331,10 +377,19 @@ def run_once() -> dict:
                 s.rollback()
                 log.warning("action outcome evaluation failed: %s", ex)
             for l in launches:
+                bid = brands.launch_brand(s, l)
+                if bid not in conns:
+                    continue  # its store's connection failed; reported above
+                client, currency, _act = conns[bid]
                 try:
                     r = check_launch(s, client, l, (l.objects or {}).get("currency") or currency)
                     result["checked"].append(r)
                     new_ids += r["new_alerts"]
+                except MetaRateLimited as ex:  # Meta asked to slow down: stop calling it in this run
+                    s.rollback()
+                    result["errors"].append(str(ex))
+                    result["rate_limited"] = True
+                    break
                 except Exception as ex:  # one bad launch must not stop the others
                     s.rollback()
                     log.warning("check failed for launch %s: %s", l.id, ex)
@@ -351,7 +406,12 @@ def run_once() -> dict:
             try:
                 from .actions import pending_alerts
                 checked_ok = {r["launch_id"] for r in result["checked"]}
-                logs = auto_apply(s, client, pending_alerts(s, checked_ok, ad_account_path(vals["meta_ad_account_id"])))
+                logs = []
+                for bid, (client, _cur, act) in conns.items():  # each store acts through its own connection
+                    if bid in frozen or result.get("rate_limited") or meta_paused()[0]:
+                        continue
+                    mine = checked_ok & {l.id for l in groups[bid]}
+                    logs += auto_apply(s, client, pending_alerts(s, mine, act))
                 result["auto_actions"] = [{"alert_id": l.alert_id, "ok": bool(l.ok),
                                            "description": l.description, "error": l.error} for l in logs]
             except Exception as ex:
@@ -419,7 +479,7 @@ def start_scheduler() -> None:
             run_once()
         except Exception as ex:
             log.exception("monitor run failed: %s", ex)
-        t = threading.Timer(MONITOR_INTERVAL_HOURS * 3600, loop)
+        t = threading.Timer(max(MONITOR_INTERVAL_HOURS, 1.0) * 3600, loop)  # never more often than hourly
         t.daemon = True
         t.start()
 

@@ -113,8 +113,7 @@ $("#login-form").addEventListener("submit", async (ev) => {
 $("#btn-logout").addEventListener("click", async () => {
   try { await rawApi("/api/auth/logout", { method: "POST", body: { refresh_token: tokens.refresh } }); } catch {}
   tokens.clear();
-  currentPlan = null;
-  showLogin();
+  location.reload();
 });
 
 function toast(msg, isError = false) {
@@ -171,17 +170,27 @@ function formInputs() {
     country: fd.get("country"),
     product: fd.get("product"),
     niche: fd.get("niche"),
+    category_note: (fd.get("category_note") || "").trim(),
+    brand_id: +fd.get("brand_id") || 0,
     price_usd: +fd.get("price_usd"),
     duration_days: +fd.get("duration_days"),
     unit_cost_usd: +fd.get("unit_cost_usd") || 0,
     shipping_usd: +fd.get("shipping_usd") || 0,
+    offer: (fd.get("offer") || "").trim(),
+    usp: (fd.get("usp") || "").trim(),
+    delivery_days: +fd.get("delivery_days") || 0,
+    returns: (fd.get("returns") || "").trim(),
+    social_proof: (fd.get("social_proof") || "").trim(),
   };
 }
 
 function fillForm(inputs) {
   const f = $("#plan-form");
-  f.elements.unit_cost_usd.value = ""; f.elements.shipping_usd.value = "";
-  for (const [k, v] of Object.entries(inputs)) if (f.elements[k]) f.elements[k].value = v;
+  f.elements.unit_cost_usd.value = ""; f.elements.shipping_usd.value = ""; f.elements.category_note.value = "";
+  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
+  f.elements.price_usd.dataset.touched = "1";  // a saved plan's price is a real choice
+  for (const [k, v] of Object.entries(inputs)) if (f.elements[k]) f.elements[k].value = (k === "delivery_days" && !v) ? "" : (v ?? "");
+  updateNoteField();
 }
 
 // ---------- views ----------
@@ -219,12 +228,16 @@ function newPlan() {
   $("#est-updating").textContent = "";
   const f = $("#plan-form");
   f.elements.product.value = "";
+  f.elements.category_note.value = "";
+  delete f.elements.price_usd.dataset.touched;  // a new plan gets the category's usual price again
   $("#plan-card").hidden = true;
   $("#estimate-card").hidden = true;
   $("#estimate-empty").hidden = false;
   setFormLocked(false);
   updateConversions();
   if (f.elements.country.options.length) liveEstimate();  // the defaults already make an estimate
+  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
+  setTimeout(prefillBrief, 0);
 }
 
 // Open a saved plan on the plan page, with the page title naming it.
@@ -273,24 +286,28 @@ async function init() {
   if (!me.res.ok) { tokens.clear(); showLogin(); return; }
   $("#who").textContent = me.data.email || "";
   ME = me.data;
-  document.querySelectorAll(".owner-only").forEach((el) => (el.hidden = !ME.is_superuser));
+  document.body.classList.toggle("team", !ME.is_superuser);
   const meta = await api("/api/meta");
   $("#country").innerHTML = Object.entries(meta.countries)
     .map(([code, name]) => `<option value="${code}" ${code === "US" ? "selected" : ""}>${name}</option>`)
     .join("");
-  $("#niche").innerHTML = Object.entries(meta.niches)
-    .map(([k, label]) => `<option value="${k}" ${k === meta.default_niche ? "selected" : ""}>${label}</option>`)
-    .join("");
+  CATEGORIES = meta.categories || Object.entries(meta.niches).map(([key, label]) => ({ key, label, group: "Products" }));
+  const groups = [...new Set(CATEGORIES.map((c) => c.group))];
+  $("#niche").innerHTML = groups.map((g) => `<optgroup label="${esc(g)}">${CATEGORIES.filter((c) => c.group === g)
+    .map((c) => `<option value="${esc(c.key)}" ${c.key === meta.default_niche ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</optgroup>`).join("");
+  updateNoteField();
   const fxi = meta.fx || {};
   const when = fxi.updated ? new Date(fxi.updated).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
   $("#rate").textContent = fxi.source === "live" ? `Today's rate: 1 USD = ${(+meta.pkr_per_usd).toFixed(2)} PKR · updated ${when}`
     : fxi.source === "saved" ? `1 USD = ${(+meta.pkr_per_usd).toFixed(2)} PKR · last known rate, ${when} (the live rate could not be reached)`
     : `1 USD = ${meta.pkr_per_usd} PKR (fixed rate from settings)`;
   PKR_PER_USD = meta.pkr_per_usd;
+  await loadBrandOptions().catch(() => {});
   if (currentPlan) fillForm(currentPlan.inputs);
   updateConversions();
   viewFromHash();
   if (location.hash.slice(1) === "plan" && !currentPlan) liveEstimate();
+  if (!currentPlan) prefillBrief();
   const ms = await api("/api/meta/settings");
   $("#meta-dot").classList.toggle("on", ms.connected);
   refreshAlertBadge();
@@ -317,7 +334,31 @@ $("#plan-form").addEventListener("input", () => {
   clearTimeout(estTimer);
   estTimer = setTimeout(liveEstimate, 500);
 });
-$("#plan-form").addEventListener("change", () => { clearTimeout(estTimer); estTimer = setTimeout(liveEstimate, 150); });
+$("#plan-form").addEventListener("change", (ev) => {
+  if (ev.target.name === "niche") onCategoryChange();
+  clearTimeout(estTimer); estTimer = setTimeout(liveEstimate, 150);
+});
+$("#plan-form").elements.price_usd.addEventListener("input", (ev) => { ev.target.dataset.touched = "1"; });
+
+let CATEGORIES = [];
+// "Other" needs the user's words; for the rest they are an optional extra for the AI.
+function updateNoteField() {
+  const other = $("#plan-form").elements.niche.value === "other";
+  const input = $("#plan-form").elements.category_note;
+  input.required = other;
+  $("#note-label").innerHTML = other ? "What is it? <em class=\"opt req\">needed for Other</em>" : "What is it exactly? <em class=\"opt\">optional</em>";
+  input.placeholder = other ? "e.g. prayer mats, phone cases, car accessories" : "e.g. stainless steel cutlery for weddings and gifts";
+}
+// A new category suggests its usual price, unless the user already typed one.
+function onCategoryChange() {
+  updateNoteField();
+  const f = $("#plan-form");
+  const c = CATEGORIES.find((x) => x.key === f.elements.niche.value);
+  if (c && c.typical_price && !f.elements.price_usd.dataset.touched) {
+    f.elements.price_usd.value = c.typical_price;
+    updateConversions();
+  }
+}
 
 function setFormLocked(locked) {
   [...$("#plan-form").elements].forEach((el) => (el.disabled = locked));
@@ -334,7 +375,7 @@ function startFromCurrentInputs() {
 
 async function liveEstimate() {
   const f = $("#plan-form");
-  const ok = ["budget_pkr", "price_usd", "duration_days"].every((k) => f.elements[k].checkValidity());
+  const ok = ["budget_pkr", "price_usd", "duration_days", "category_note"].every((k) => f.elements[k].checkValidity());
   if (!ok || !f.elements.country.value) return;
   const seq = ++estSeq;
   $("#est-updating").textContent = "Updating";
@@ -378,7 +419,7 @@ function renderEstimate(e) {
   }
   const se = e.season || {};
   $("#est-season").innerHTML = se.label
-    ? `<span class="tag ${se.label === "peak season" ? "ahead" : se.label === "off season" ? "behind" : "on_track"}">${esc(se.label)}</span> ${esc(se.start)} to ${esc(se.end)} · Meta prices ×${se.cpm} · jacket demand ×${se.cvr}`
+    ? `<span class="tag ${se.label === "peak season" ? "ahead" : se.label === "off season" ? "behind" : "on_track"}">${esc(se.label)}</span> ${esc(se.start)} to ${esc(se.end)} · Meta prices ×${se.cpm} · demand ×${se.cvr}`
     : "";
   $("#est-warnings").innerHTML = e.warnings.map((w) => `<li>${icon("alert")}<span>${esc(w)}</span></li>`).join("");
 }
@@ -388,7 +429,7 @@ function renderEstimate(e) {
 $("#plan-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const btn = $("#btn-generate");
-  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Writing the plan, about 10 seconds`;
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Writing and checking the plan, about a minute`;
   try {
     const plan = await api("/api/plans", { method: "POST", body: formInputs() });
     renderEstimate(plan.estimate);
@@ -406,7 +447,8 @@ function latest(plan) { return plan.versions[plan.versions.length - 1].content; 
 
 function setPlanTitle(plan) {
   $("#page-title").textContent = `Plan #${plan.id}: ${plan.inputs.product}`;
-  $("#page-sub").textContent = `${plan.inputs.country} · ${fmt.pkr(plan.inputs.budget_pkr)} over ${plan.inputs.duration_days} days`;
+  const store = BRANDS.length > 1 ? (BRANDS.find((b) => b.id === (plan.inputs.brand_id || 0))?.name || "a removed store") + " · " : "";
+  $("#page-sub").textContent = `${store}${plan.inputs.country} · ${fmt.pkr(plan.inputs.budget_pkr)} over ${plan.inputs.duration_days} days`;
 }
 
 const NEXT_STEP = {
@@ -434,13 +476,14 @@ function renderPlan(plan) {
   const st = $("#plan-status");
   st.textContent = fmt.label(plan.status); st.className = `tag ${plan.status}`;
   $("#btn-approve").hidden = plan.status !== "draft";
-  $("#btn-edit").hidden = plan.status === "launched";
+  $("#btn-edit").hidden = plan.status === "launched" || plan.status === "launching";
   $("#btn-launch").hidden = plan.status !== "approved";
-  $("#btn-delete-plan").hidden = plan.status === "launched" || (plan.launches || []).length > 0;
+  $("#btn-delete-plan").hidden = ["launched", "launching"].includes(plan.status) || (plan.launches || []).length > 0;
   $("#plan-editor").hidden = true;
   setFormLocked(false);
   $("#plan-view").hidden = false;
   renderLaunch(plan);
+  renderPolicy(plan);
   loadReadiness(plan);
 
   const li = (arr) => `<ul>${(arr || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
@@ -468,7 +511,7 @@ function renderPlan(plan) {
     <div class="plan-section">
       <div class="section-head"><h3>Creatives</h3></div>
       <div class="creatives">${c.creatives.map((cr, i) => `
-        <div class="creative"><div class="fmt">${i + 1} · ${esc(cr.format)}</div>
+        <div class="creative"><div class="fmt">${i + 1} · ${esc(cr.format)}${cr.angle ? ` <span class="angle">${esc(cr.angle)}</span>` : ""}</div>
         <div class="hook">${esc(cr.hook)}</div>
         <div class="copy">${esc(cr.primary_text)}</div>
         <div class="foot"><span>${esc(cr.headline)}</span><span class="cta">${esc(cr.cta)}</span></div></div>`).join("")}</div>
@@ -521,7 +564,7 @@ const label = (k) => FIELD_LABELS[k] || fmt.label(k).replace(/^./, (c) => c.toUp
 const ITEM_FIELDS = {
   phases: { name: "", days: 0, budget_pct: 0, goal: "" },
   ad_sets: { name: "", audience: "", placements: "Advantage+ placements", daily_budget_pct: 0, optimization: "Purchase" },
-  creatives: { format: "Static image 1:1", hook: "", primary_text: "", headline: "", cta: "SHOP_NOW", visual_prompt: "" },
+  creatives: { format: "Static image 1:1", angle: "", hook: "", primary_text: "", headline: "", cta: "SHOP_NOW", visual_prompt: "" },
 };
 const LIST_SECTIONS = new Set(Object.keys(ITEM_FIELDS));
 const LINE_SECTIONS = new Set(["kill_rules", "scale_rules", "risks"]);
@@ -652,7 +695,13 @@ $("#btn-approve").addEventListener("click", async () => {
 async function loadCreatives(plan) {
   const panel = $("#creatives-panel");
   panel.hidden = false;
-  const [st, rows] = await Promise.all([api("/api/creatives/status"), api(`/api/plans/${plan.id}/creatives`)]);
+  if (panel.dataset.plan !== String(plan.id)) {
+    $("#creative-slots").innerHTML = `<p class="muted">Loading images</p>`;
+    $("#product-photo-preview").innerHTML = icon("image");
+    $("#brand-style").value = "";
+    panel.dataset.plan = String(plan.id);
+  }
+  const [st, rows] = await Promise.all([api(`/api/creatives/status?brand_id=${plan.inputs.brand_id || 0}`), api(`/api/plans/${plan.id}/creatives`)]);
   if (currentPlan?.id !== plan.id) return;  // another plan was opened meanwhile
   $("#creatives-status").textContent = st.configured
     ? `Generated with ${st.provider}` : `Generation is off: ${st.hint || "set IMAGE_API_KEY in .env"}. Uploads still work`;
@@ -674,10 +723,12 @@ async function loadCreatives(plan) {
           </select>
           <input type="file" class="upload" accept="image/*" hidden />
           <button class="btn small upload-btn" type="button">${icon("upload")}Upload</button>
-          <button class="btn small primary gen" type="button" ${st.configured ? "" : "disabled"}>Generate</button>
+          <button class="btn small primary gen" type="button" ${st.configured ? "" : "disabled"}>${/carousel/i.test(cr.format) ? "Add a card" : "Generate"}</button>
         </div>
       </div>
       <div class="prompt">${esc(cr.visual_prompt || "This plan version has no image brief. Regenerate the plan to get one")}</div>
+      ${/carousel/i.test(cr.format) ? (() => { const n = (byIdx[i] || []).filter((r) => r.selected).length;
+        return `<p class="carousel-hint ${n >= 2 ? "ok" : ""}">Carousel: every image marked <b>Use</b> becomes a card, in this order (2 to 10). ${n} card${n === 1 ? "" : "s"} now${n < 2 ? ", add at least " + (2 - n) + " more" : ""}.</p>`; })() : ""}
       <div class="thumbs">${(byIdx[i] || []).map(thumb).join("") || `<span class="muted small">No images yet</span>`}</div>
     </div>`).join("");
 
@@ -689,7 +740,7 @@ async function loadCreatives(plan) {
         await api(`/api/plans/${plan.id}/creatives/generate`, { method: "POST",
           body: { creative_index: idx, aspect: slot.querySelector(".aspect").value || null } });
         toast("Image generated."); await loadCreatives(plan);
-      } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Generate"; }
+      } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = /carousel/i.test(c.creatives[idx]?.format) ? "Add a card" : "Generate"; }
     });
     const fileInput = slot.querySelector(".upload");
     slot.querySelector(".upload-btn").addEventListener("click", () => fileInput.click());
@@ -723,13 +774,13 @@ function thumb(r) {
 $("#product-photo").addEventListener("change", async () => {
   const f = $("#product-photo").files[0]; if (!f) return;
   try {
-    await upload("/api/creatives/product-photo", f);
-    toast("Product photo saved."); if (currentPlan) loadCreatives(currentPlan);
+    await upload(`/api/creatives/product-photo?brand_id=${currentPlan?.inputs.brand_id || 0}`, f);
+    toast("Product photo saved."); if (currentPlan) loadCreatives(currentPlan).catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
 });
 
 $("#btn-brand-save").addEventListener("click", async () => {
-  try { await api("/api/creatives/brand-style", { method: "POST", body: { brand_style: $("#brand-style").value } }); toast("Brand style saved."); }
+  try { await api(`/api/creatives/brand-style?brand_id=${currentPlan?.inputs.brand_id || 0}`, { method: "POST", body: { brand_style: $("#brand-style").value } }); toast("Brand style saved for this store."); }
   catch (e) { toast(e.message, true); }
 });
 
@@ -783,7 +834,7 @@ $("#btn-launch").addEventListener("click", async () => {
   } catch (e) { toast(e.message, true); }
   finally {
     btn.textContent = "Create on Meta, paused";
-    if (currentPlan?.id === plan.id && currentPlan.status === "approved") loadReadiness(currentPlan);
+    if (currentPlan?.id === plan.id && currentPlan.status === "approved") loadReadiness(currentPlan).catch(() => {});
   }
 });
 
@@ -832,7 +883,7 @@ function renderAlerts(alerts) {
           </div>
         </div>
         ${diag ? `<div class="diag">${esc(diag.diagnosis)}</div>` : ""}
-        ${opts.length ? `<ol>${opts.map((o, i) => `<li><div>${esc(o.action)}<span class="eff">${esc(o.expected_effect)} <span class="risk">· risk: ${esc(o.risk)}</span></span></div>${o.spec && a.status !== "resolved" ? `<button class="btn small" data-apply="${a.id}" data-idx="${i}" title="${esc(specLabel(o.spec))}">Do this</button>` : "<span></span>"}</li>`).join("")}</ol>` : ""}
+        ${opts.length ? `<ol>${opts.map((o, i) => `<li><div>${esc(o.action)}<span class="eff">${esc(o.expected_effect)} <span class="risk">· risk: ${esc(o.risk)}</span></span></div>${o.spec && a.status !== "resolved" ? `<button class="btn small owner-only" data-apply="${a.id}" data-idx="${i}" title="${esc(specLabel(o.spec))}">Do this</button>` : "<span></span>"}</li>`).join("")}</ol>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -850,7 +901,7 @@ function renderAlerts(alerts) {
       try {
         const r = await api(`/api/alerts/${b.dataset.apply}/apply`, { method: "POST", body: { option_index: +b.dataset.idx } });
         toast(`Done: ${r.description}`);
-        loadMonitor();
+        loadMonitor().catch((e) => toast(e.message, true));
       } catch (e) { toast(e.message, true); b.disabled = false; }
     })
   );
@@ -904,7 +955,7 @@ async function loadActionLog() {
     <li class="${l.ok ? "" : "bad"}"><span>${esc(l.description)}${l.error ? ` · ${esc(l.error)}` : ""}
       <span class="meta">${l.mode} · ${utc(l.created_at).toLocaleString()}${l.undone ? " · undone" : ""}</span></span>
       <span class="toolbar">${l.outcome ? `<span class="tag ${l.outcome.verdict}" title="${esc(l.outcome.note)}">${fmt.label(l.outcome.verdict)}</span>` : ""}
-      ${l.ok && !l.undone && l.mode !== "undo" ? `<button class="btn small ghost" data-undo="${l.id}">${icon("undo")}Undo</button>` : ""}</span></li>`).join("")
+      ${l.ok && !l.undone && l.mode !== "undo" ? `<button class="btn small ghost owner-only" data-undo="${l.id}">${icon("undo")}Undo</button>` : ""}</span></li>`).join("")
     : `<li class="empty">No changes made yet</li>`;
   document.querySelectorAll("#action-log button[data-undo]").forEach((b) =>
     b.addEventListener("click", async () => {
@@ -958,7 +1009,7 @@ function outcomeLine(o, launchId) {
         <div class="progress" title="Day ${o.days_active} of ${o.duration_days}"><div style="width:${pct}%"></div></div>
         <div class="hint">Day ${o.days_active} of ${o.duration_days} · plan ${o.predicted_low}–${o.predicted_high} orders</div></div>
       <div class="side">${o.completed ? `Completed${o.rules_added?.length ? `<br>${o.rules_added.length} rules learned` : ""}`
-        : `<button class="btn small" data-complete="${launchId}">Close and learn</button>`}</div>
+        : `<button class="btn small owner-only" data-complete="${launchId}">Close and learn</button>`}</div>
     </div>
     ${o.summary ? `<p class="outcome-summary">${esc(o.summary)}</p>` : ""}
   </div>`;
@@ -982,7 +1033,7 @@ $("#btn-monitor-run").addEventListener("click", async () => {
     const r = await api("/api/monitor/run", { method: "POST" });
     toast(r.skipped ? "A check is already running; results appear in a minute." :
           r.note || (r.errors?.length ? r.errors[0] : `Checked ${r.checked?.length || 0} campaign(s).`), !!r.errors?.length);
-    loadMonitor();
+    loadMonitor().catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; }
 });
@@ -993,10 +1044,10 @@ async function loadMeta() {
   const ms = await api("/api/meta/settings");
   const f = $("#meta-form");
   for (const [k, v] of Object.entries(ms.settings)) if (f.elements[k]) f.elements[k].value = v;
-  $("#btn-oauth").hidden = !ms.oauth_available;
   $("#meta-dot").classList.toggle("on", ms.connected);
   loadStats().catch((e) => toast(e.message, true));
   loadNotify().catch((e) => toast(e.message, true));
+  if (ME.is_superuser) loadBrandList().catch((e) => toast(e.message, true));
 }
 
 async function loadNotify() {
@@ -1063,10 +1114,6 @@ $("#btn-notify-test").addEventListener("click", async () => {
   finally { btn.disabled = false; btn.innerHTML = `${icon("send")}Test email`; }
 });
 
-$("#btn-oauth").addEventListener("click", async () => {
-  try { location.href = (await api("/api/meta/oauth/start")).url; }
-  catch (e) { toast(e.message, true); }
-});
 
 $("#meta-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -1074,7 +1121,7 @@ $("#meta-form").addEventListener("submit", async (ev) => {
   try {
     await api("/api/meta/settings", { method: "POST", body: { values } });
     toast("Saved.");
-    loadMeta();
+    loadMeta().catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
 });
 
@@ -1082,8 +1129,10 @@ $("#btn-meta-check").addEventListener("click", async () => {
   const out = $("#meta-status");
   out.textContent = "Checking";
   try {
-    const values = Object.fromEntries(new FormData($("#meta-form")).entries());
-    await api("/api/meta/settings", { method: "POST", body: { values } });
+    if (ME?.is_superuser) {
+      const values = Object.fromEntries(new FormData($("#meta-form")).entries());
+      await api("/api/meta/settings", { method: "POST", body: { values } });
+    }
     const st = await api("/api/meta/status");
     const list = (arr, extra) => arr.length
       ? `<ul>${arr.map((x) => `<li><code>${esc(x.id)}</code> ${esc(x.name || "")}${extra ? extra(x) : ""}</li>`).join("")}</ul>`
@@ -1103,7 +1152,7 @@ $("#btn-sync").addEventListener("click", async () => {
   try {
     const r = await api("/api/meta/sync", { method: "POST" });
     $("#sync-info").textContent = `Synced ${r.rows} monthly rows for ${r.countries} countries, ${r.since} to ${r.until}, in ${r.currency}`;
-    toast("History synced. Estimates now use your account data.");
+    toast(`History synced. Estimates now use your account data${r.winners ? `; ${r.winners} best-selling ads will guide new plans` : ""}.`);
     await loadStats();
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; }
@@ -1128,7 +1177,7 @@ async function loadHistory() {
     <td class="num">${fmt.pkr(p.budget_pkr)}</td><td class="num">${p.orders}</td>
     <td>${p.outcome ? `<div class="toolbar"><span class="mono">${p.outcome.purchases}</span><span class="tag ${p.outcome.verdict}">${fmt.label(p.outcome.verdict)}</span></div>` : `<span class="sub">not launched</span>`}</td>
     <td><span class="tag ${p.status}">${fmt.label(p.status)}</span></td>
-    <td class="num">${utc(p.created_at).toLocaleDateString()}</td><td class="open">Open ${icon("arrow")}</td></tr>`).join("")
+    <td class="num">${utc(p.created_at).toLocaleDateString()}</td><td class="open"><button type="button" class="btn small ghost" aria-label="Open plan ${p.id}">Open ${icon("arrow")}</button></td></tr>`).join("")
     : `<tr class="empty"><td colspan="9">No plans yet. Start one from New plan</td></tr>`;
   document.querySelectorAll("#history-table tbody tr[data-id]").forEach((tr) =>
     tr.addEventListener("click", () => openPlan(tr.dataset.id).catch((e) => toast(e.message, true)))
@@ -1176,7 +1225,7 @@ $("#rule-form").addEventListener("submit", async (ev) => {
   try {
     await api("/api/rules", { method: "POST", body: { rule } });
     $("#rule-input").value = "";
-    loadRules();
+    loadRules().catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
 });
 
@@ -1303,7 +1352,7 @@ $("#billing-form").addEventListener("submit", async (ev) => {
   try {
     await api("/api/billing", { method: "POST", body: { budget_usd: +$("#billing-form").elements.budget_usd.value || 0, prices } });
     toast("Budget and prices saved");
-    loadBilling();
+    loadBilling().catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
 });
 
@@ -1391,7 +1440,7 @@ $("#team-form").addEventListener("submit", async (ev) => {
     await api("/api/users/register", { method: "POST", body: { email: f.email.value.trim(), password: f.password.value } });
     f.reset();
     toast("Added. Give them the email and password; they can change the password on this page.");
-    loadAccount();
+    loadAccount().catch((e) => toast(e.message, true));
   } catch (e) { toast(e.message, true); }
 });
 
@@ -1462,3 +1511,142 @@ $("#pw-toggle").addEventListener("click", () => {
   $("#pw-toggle").setAttribute("aria-label", show ? "Hide password" : "Show password");
   input.focus();
 });
+
+
+// ---------- stores (brands): one Meta connection each ----------
+
+let BRANDS = [];
+
+// The Store picker on the plan form; hidden while there is only the main store.
+async function loadBrandOptions() {
+  BRANDS = await api("/api/brands");
+  const sel = $("#brand-select");
+  const keep = sel.value;
+  sel.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}${b.connected ? "" : " (not connected)"}</option>`).join("");
+  if (keep && BRANDS.some((b) => String(b.id) === keep)) sel.value = keep;
+  $("#brand-field").hidden = BRANDS.length < 2;
+}
+
+async function loadBrandList() {
+  await loadBrandOptions();
+  $("#brand-list").innerHTML = BRANDS.map((b) => `
+    <li><span>${esc(b.name)}${b.main ? ` <span class="tag">main</span>` : ""}
+      <span class="meta">${b.account ? esc(b.account) : "no ad account"} · ${b.connected ? "connected" : "not connected"}</span></span>
+      ${b.main ? `<span class="sub">edit it above</span>` : `<button class="btn small ghost" data-brand-edit="${b.id}">Edit</button>`}</li>`).join("");
+}
+
+function openBrandForm(b) {
+  const f = $("#brand-form");
+  f.reset();
+  f.elements.id.value = b ? b.id : "";
+  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls"])
+    f.elements[k].value = b ? (b[k] || "") : "";
+  $("#brand-form-title").textContent = b ? `Edit ${b.name}` : "New store";
+  $("#btn-brand-delete").hidden = !b;
+  $("#brand-check").innerHTML = "";
+  f.hidden = false;
+  f.elements.name.focus();
+}
+
+$("#btn-brand-new").addEventListener("click", () => openBrandForm(null));
+$("#btn-brand-cancel").addEventListener("click", () => { $("#brand-form").hidden = true; });
+$("#brand-list").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-brand-edit]");
+  if (!b) return;
+  try { openBrandForm(await api(`/api/brands/${b.dataset.brandEdit}`)); } catch (e) { toast(e.message, true); }
+});
+
+function brandValues() {
+  const f = $("#brand-form");
+  const v = {};
+  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls"])
+    v[k] = f.elements[k].value.trim();
+  return v;
+}
+
+// Save, then return the id (a new store gets one on its first save).
+async function saveBrand() {
+  const f = $("#brand-form");
+  if (!f.elements.name.value.trim()) { f.elements.name.focus(); throw new Error("Give the store a name"); }
+  const id = f.elements.id.value;
+  const out = await api(id ? `/api/brands/${id}` : "/api/brands", { method: "POST", body: { values: brandValues() } });
+  f.elements.id.value = out.id;
+  f.elements.meta_access_token.value = out.meta_access_token;  // masked from now on
+  $("#btn-brand-delete").hidden = false;
+  $("#brand-form-title").textContent = `Edit ${out.name}`;
+  await loadBrandList();
+  return out.id;
+}
+
+$("#brand-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try { await saveBrand(); toast("Store saved."); $("#brand-form").hidden = true; } catch (e) { toast(e.message, true); }
+});
+
+$("#btn-brand-check").addEventListener("click", async () => {
+  const out = $("#brand-check");
+  out.textContent = "Checking";
+  try {
+    const id = await saveBrand();
+    const st = await api(`/api/brands/${id}/check`, { method: "POST" });
+    const list = (arr) => arr.length ? arr.map((x) => `<code>${esc(x.id)}</code> ${esc(x.name || "")}`).join(" · ") : "none";
+    out.innerHTML = `<div>Token of <b>${esc(st.user.name || "")}</b></div>
+      <div>Ad accounts: ${list(st.accounts)}</div><div>Pages: ${list(st.pages)}</div><div>Pixels: ${list(st.pixels)}</div>`;
+  } catch (e) { out.innerHTML = `<span style="color:var(--neg)">${esc(e.message)}</span>`; }
+});
+
+$("#btn-brand-delete").addEventListener("click", async () => {
+  const f = $("#brand-form");
+  if (!f.elements.id.value) return;
+  if (!(await ask("Delete this store?", "Its connection is removed from the app. Nothing changes on Meta. Stores that plans use cannot be deleted.", "Delete", true))) return;
+  try { await api(`/api/brands/${f.elements.id.value}`, { method: "DELETE" }); f.hidden = true; toast("Store deleted."); loadBrandList(); }
+  catch (e) { toast(e.message, true); }
+});
+
+
+// ---------- sales brief: prefill with this store's last answers ----------
+
+const BRIEF_KEYS = ["offer", "usp", "delivery_days", "returns", "social_proof"];
+let briefSeq = 0;
+async function prefillBrief() {
+  const f = $("#plan-form");
+  if (currentPlan || BRIEF_KEYS.some((k) => String(f.elements[k].value || "").trim())) return;  // never overwrite
+  const seq = ++briefSeq;
+  try {
+    const b = await api(`/api/brief?brand_id=${+f.elements.brand_id.value || 0}`);
+    if (seq !== briefSeq || currentPlan) return;
+    for (const k of BRIEF_KEYS) if (b[k] && !String(f.elements[k].value || "").trim()) f.elements[k].value = b[k];
+    $("#sell-box").open = !BRIEF_KEYS.some((k) => b[k]);  // open it when nothing is filled yet
+  } catch { /* the form still works without it */ }
+}
+$("#plan-form").elements.brand_id.addEventListener("change", () => {
+  const f = $("#plan-form");
+  for (const k of BRIEF_KEYS) f.elements[k].value = "";  // another store, other facts
+  prefillBrief();
+});
+
+
+$("#btn-brand-winners").addEventListener("click", async () => {
+  const btn = $("#btn-brand-winners"), out = $("#brand-check");
+  btn.disabled = true; out.textContent = "Reading this store's ad history (up to a minute)";
+  try {
+    const id = await saveBrand();
+    const r = await api(`/api/brands/${id}/winners`, { method: "POST" });
+    out.textContent = r.winners ? `${r.winners} best-selling ads found (${r.since} to ${r.until}). New plans for this store start from them.`
+      : "No ad with 3 or more purchases in the last 2 years yet.";
+  } catch (e) { out.innerHTML = `<span style="color:var(--neg)">${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+});
+
+
+// ---------- Meta policy findings in the ad copy ----------
+function renderPolicy(plan) {
+  const box = $("#policy");
+  const items = plan.policy || [];
+  box.hidden = !items.length;
+  if (!items.length) return;
+  const blocks = items.filter((f) => f.level === "block").length;
+  box.innerHTML = `<div class="panel-title">${icon("alert")}${blocks ? `Meta would likely reject ${blocks} part${blocks > 1 ? "s" : ""} of this copy: fix before launching` : "Check this copy against Meta's rules"}</div>`
+    + items.map((f) => `<div class="check ${f.level === "block" ? "fail" : "warn"}">${icon(f.level === "block" ? "x" : "alert")}<span><b>${esc(f.where)}:</b> ${esc(f.text)}</span></div>`).join("")
+    + `<p class="hint" style="margin-top:8px">Rejected ads hurt the ad account's standing. Use Edit to change the words.</p>`;
+}

@@ -35,7 +35,7 @@ def test_gemini_sends_product_photo_and_aspect(monkeypatch, tmp_path):
     assert sent["url"].endswith(":generateContent") and sent["headers"] == {"x-goog-api-key": "k"}
     parts = sent["body"]["contents"][0]["parts"]
     assert parts[0]["inline_data"]["mime_type"] == "image/png"          # product photo first
-    assert "no logos" in parts[1]["text"] and "garment" in parts[1]["text"]
+    assert "no logos" in parts[1]["text"] and "Show exactly this product" in parts[1]["text"]
     assert sent["body"]["generationConfig"]["imageConfig"]["aspectRatio"] == "9:16"
 
 

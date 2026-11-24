@@ -38,7 +38,10 @@ def build() -> dict:
                     continue
                 seen.add(e["name"])
                 days = (date.fromisoformat(e["date"]) - today).days
-                when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+                last = date.fromisoformat(e["date"]) + timedelta(days=e.get("days", 1) - 1)
+                when = (f"now, until {last.strftime('%d %b')}" if days < 0 else
+                        "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days")
+                days = max(days, 0)
                 items.append(_item("high" if days <= 7 else "medium", f"{e['name']} {when}",
                                    f"{e['note']}. Plan a campaign for it now so it is through review and learning before the day.",
                                    "plan", "Start a plan"))
@@ -97,25 +100,44 @@ def build() -> dict:
             items.append(_item("low", f"{len(open_alerts)} open alert{'s' if len(open_alerts) > 1 else ''}",
                                "Suggestions are ready; most can be applied with one click.", "monitor", "See alerts"))
 
-        # --- setup gaps
-        if not vals["meta_access_token"] or not vals["meta_ad_account_id"]:
+        # --- setup gaps: every store that has plans waiting or running (the main store when there are none)
+        from . import brands as _brands
+        used = sorted({p.brand_id or 0 for p in plans if p.status in ("draft", "approved", "launching", "launched")} or {0})
+        names = {b["id"]: b["name"] for b in _brands.all_brands(s)}
+        for bid in used:
+            if bid == 0 or bid not in names:
+                continue
+            bv = _brands.settings_for(s, bid)
+            if not bv["meta_access_token"] or not bv["meta_ad_account_id"]:
+                items.append(_item("high", f"Connect {names[bid]} to Meta",
+                                   "Its plans cannot be launched until its token and ad account are saved.", "meta", "Open Stores"))
+            elif not bv["meta_pixel_id"]:
+                items.append(_item("high", f"Add {names[bid]}'s pixel id",
+                                   "Without it its ads optimise for clicks, not purchases, and retargeting is off.", "meta", "Open Stores"))
+        if 0 not in used:
+            pass  # the main store is not used by any plan: no setup nagging for it
+        elif not vals["meta_access_token"] or not vals["meta_ad_account_id"]:
             items.append(_item("high", "Connect the Meta ad account", "Without it nothing can be launched or measured.",
                                "meta", "Connect"))
         elif not last_sync:
             items.append(_item("medium", "Sync your Meta history",
                                "Two years of your own results make the order estimates far more accurate than benchmarks.",
                                "meta", "Sync"))
-        if vals["meta_access_token"] and not vals["meta_pixel_id"]:
+        if 0 in used and vals["meta_access_token"] and not vals["meta_pixel_id"]:
             items.append(_item("high", "Add the pixel id",
                                "Without it ads optimise for clicks, not purchases, and retargeting is off.", "meta", "Add pixel"))
         if not llm.configured():
             items.append(_item("medium", "Plans use the fixed template",
                                "Add GEMINI_API_KEY (or ANTHROPIC_API_KEY) on the server for plans written for each product, country and season.",
                                "billing", "See payments"))
-        if not vals.get("product_photo"):
-            items.append(_item("low", "Upload a product photo",
-                               "Open any plan: the photo box is under Ad images. Generated images then show your real jacket.",
-                               "history", "Open My plans"))
+        for bid in used:  # each store has its own product photo
+            if bid != 0 and bid not in names:
+                continue
+            if not _brands.settings_for(s, bid).get("product_photo"):
+                who = "" if bid == 0 else f" for {names[bid]}"
+                items.append(_item("low", f"Upload a product photo{who}",
+                                   "Open any plan: the photo box is under Ad images. Generated images then show your real product.",
+                                   "history", "Open My plans"))
 
     spent, budget = usage.month_cost(), usage.budget()
     if budget and spent >= budget * 0.8:

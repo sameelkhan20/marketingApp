@@ -4,7 +4,7 @@ Providers:
 - higgsfield (default): the team's plan credits through Higgsfield's MCP server (see higgsfield.py);
   connected once on the Connections page, product photo passed via a temporary public R2 URL.
 - gemini: POST {GEMINI_BASE}/models/{model}:generateContent with responseModalities=IMAGE.
-  The product photo goes in as an inline_data part so the jacket stays exactly as photographed;
+  The product photo goes in as an inline_data part so the product stays exactly as photographed;
   the image comes back as inline base64.
 - openai: gpt-image-1 (edits endpoint when a product photo is given).
 
@@ -26,9 +26,10 @@ OPENAI_SIZES = {"1:1": "1024x1024", "9:16": "1024x1536", "4:5": "1024x1536"}
 # and Meta rejects ads for trademark or likeness.
 SAFE_SUFFIX = ("High-quality realistic photograph. No text, no letters, no captions, no watermarks, no logos, "
                "no brand names or brand marks, no celebrities or recognizable real people.")
-REFERENCE_RULE = ("The attached photo is the PRODUCT. Show exactly this garment: keep its colour, material, cut, "
-                  "collar, zips, buttons, stitching and every visible detail unchanged. Take only the garment from "
-                  "the photo; ignore its background, the person wearing it and any text or watermark.")
+REFERENCE_RULE = ("The attached photo is the PRODUCT. Show exactly this product: keep its colour, material, shape, "
+                  "proportions, finish and every visible detail (stitching, buttons, engraving, pattern) unchanged. "
+                  "Take only the product from the photo; ignore its background, any person holding or wearing it and "
+                  "any text or watermark.")
 
 
 class ImageGenError(Exception):

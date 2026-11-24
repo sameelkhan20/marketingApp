@@ -36,7 +36,10 @@ class Plan(Base):
     budget_pkr: Mapped[float] = mapped_column(Float)
     country: Mapped[str] = mapped_column(String(4))
     product: Mapped[str] = mapped_column(Text)
-    niche: Mapped[str] = mapped_column(String(40))
+    niche: Mapped[str] = mapped_column(String(40))  # product category key (backend/benchmarks.py)
+    category_note: Mapped[str] = mapped_column(Text, default="")  # the user's words for the product type
+    brand_id: Mapped[int] = mapped_column(Integer, default=0)      # which store's Meta connection (backend/brands.py)
+    brief: Mapped[dict] = mapped_column(JSON, default=dict)          # offer, why buy, delivery, returns, reviews
     price_usd: Mapped[float] = mapped_column(Float)
     duration_days: Mapped[int] = mapped_column(Integer)
     # estimate snapshot
@@ -73,6 +76,8 @@ class LearnedRule(Base):
     source_plan_id: Mapped[int] = mapped_column(Integer, nullable=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     active: Mapped[int] = mapped_column(Integer, default=1)
+    niche: Mapped[str] = mapped_column(String(40), default="")  # the category it was learned for; "" = every plan
+    brand_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the store; None = every store
 
 
 class Setting(Base):
@@ -231,6 +236,7 @@ class Creative(Base):
     file_name: Mapped[str] = mapped_column(String(120))
     selected: Mapped[int] = mapped_column(Integer, default=1)
     meta_image_hash: Mapped[str] = mapped_column(String(80), default="")
+    meta_image_account: Mapped[str] = mapped_column(String(40), default="")  # the account the hash belongs to
 
 
 class ActionLog(Base):
@@ -315,7 +321,13 @@ def init_db() -> None:
 
 
 # create_all never alters existing tables: add columns introduced after the first deploy.
-_NEW_COLUMNS = [("users", "token_version", "INTEGER NOT NULL DEFAULT 0")]
+_NEW_COLUMNS = [("users", "token_version", "INTEGER NOT NULL DEFAULT 0"),
+                ("plans", "category_note", "TEXT NOT NULL DEFAULT ''"),
+                ("plans", "brand_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("learned_rules", "niche", "VARCHAR(40) NOT NULL DEFAULT ''"),
+                ("plans", "brief", "TEXT NOT NULL DEFAULT '{}'"),
+                ("creatives", "meta_image_account", "VARCHAR(40) NOT NULL DEFAULT ''"),
+                ("learned_rules", "brand_id", "INTEGER")]
 
 
 def _add_missing_columns() -> None:
@@ -327,6 +339,20 @@ def _add_missing_columns() -> None:
             have = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})"))}
             if column not in have:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                if (table, column) == ("learned_rules", "brand_id"):
+                    conn.execute(text("UPDATE learned_rules SET brand_id = (SELECT p.brand_id FROM plans p "
+                                      "WHERE p.id = learned_rules.source_plan_id) WHERE source_plan_id IS NOT NULL"))
+                if (table, column) == ("learned_rules", "niche"):
+                    # rules learned before categories existed came from jacket plans: keep them there
+                    conn.execute(text("UPDATE learned_rules SET niche = COALESCE((SELECT p.niche FROM plans p "
+                                      "WHERE p.id = learned_rules.source_plan_id), '') WHERE source_plan_id IS NOT NULL"))
+        # a rule tagged with a category that no longer exists (older names) applies to every plan again
+        from .benchmarks import CATEGORIES
+        keys = ",".join(f"'{k}'" for k in CATEGORIES)
+        conn.execute(text(f"UPDATE learned_rules SET niche = '' WHERE niche <> '' AND niche NOT IN ({keys})"))
+        # emails are kept in lower case (unless that would clash with another account)
+        conn.execute(text("UPDATE users SET email = lower(email) WHERE email <> lower(email) AND NOT EXISTS "
+                          "(SELECT 1 FROM users u2 WHERE u2.id <> users.id AND lower(u2.email) = lower(users.email))"))
         # revoked tokens used to be stored whole; they are now looked up by their SHA-256
         for (tok,) in conn.execute(text("SELECT token FROM token_blacklist WHERE length(token) > 64")).fetchall():
             h = hashlib.sha256(tok.encode()).hexdigest()

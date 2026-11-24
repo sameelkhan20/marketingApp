@@ -190,10 +190,13 @@ def test_buyers_excluded_and_retargeting_uses_visitors():
 
 
 def test_cached_audiences_are_reused():
-    cached = {**SETTINGS, "aud_pixel": "PX", "aud_visitors": "V9", "aud_buyers": "B9"}
+    cached = {**SETTINGS, "aud_pixel": "PX", "aud_account": "act_123", "aud_visitors": "V9", "aud_buyers": "B9"}
     L.launch_plan(PLAN_INPUTS, RT, cached, 7)
     assert Recorder.last.audiences == []
     assert Recorder.last.adsets[2]["targeting"]["custom_audiences"] == [{"id": "V9"}]
+    # audiences made on another ad account are never used here: new ones are made
+    r = L.launch_plan(PLAN_INPUTS, RT, {**cached, "aud_account": "act_999"}, 7)
+    assert len(Recorder.last.audiences) == 2 and r["audiences"]["account"] == "act_123"
 
 
 def test_no_audiences_drops_retargeting_and_keeps_total_budget():
@@ -210,3 +213,34 @@ def test_no_pixel_no_audiences():
     r = L.launch_plan(PLAN_INPUTS, RT, {**SETTINGS, "meta_pixel_id": ""}, 7)
     assert Recorder.last.audiences == [] and len(Recorder.last.adsets) == 2
     assert any("No pixel" in n for n in r["notes"])
+
+
+# ---------- carousels (the store makes no videos) ----------
+
+def test_carousel_becomes_one_ad_with_cards():
+    content = {**CONTENT, "creatives": [{**CONTENT["creatives"][0], "format": "Carousel"}]}
+    imgs = [{"creative_index": 0, "image_hash": h} for h in ("H1", "H2", "H3")]
+    r = L.launch_plan(PLAN_INPUTS, content, SETTINGS, 7, imgs)
+    ld = Recorder.last.creatives[0]["object_story_spec"]["link_data"]
+    assert [c["image_hash"] for c in ld["child_attachments"]] == ["H1", "H2", "H3"]
+    assert all(c["link"] == SETTINGS["store_url"] and c["call_to_action"]["type"] == "SHOP_NOW" for c in ld["child_attachments"])
+    assert "image_hash" not in ld and len(r["ads"]) == 2  # one carousel ad per ad set
+
+
+def test_carousel_with_one_image_runs_as_single_image():
+    content = {**CONTENT, "creatives": [{**CONTENT["creatives"][0], "format": "Carousel"}]}
+    r = L.launch_plan(PLAN_INPUTS, content, SETTINGS, 7, [{"creative_index": 0, "image_hash": "ONLY"}])
+    ld = Recorder.last.creatives[0]["object_story_spec"]["link_data"]
+    assert ld["image_hash"] == "ONLY" and "child_attachments" not in ld
+    assert any("carousel with one image" in n for n in r["notes"])
+
+
+def test_carousel_notes_once_and_trim_warned():
+    content = {**CONTENT, "creatives": [{**CONTENT["creatives"][0], "format": "Carousel"}]}
+    r = L.launch_plan(PLAN_INPUTS, content, SETTINGS, 7, [{"creative_index": 0, "image_hash": "ONLY"}])
+    assert sum("carousel with one image" in n for n in r["notes"]) == 1
+    imgs = [{"creative_index": 0, "image_hash": f"H{k}"} for k in range(12)]
+    r = L.launch_plan(PLAN_INPUTS, content, SETTINGS, 7, imgs)
+    ld = Recorder.last.creatives[0]["object_story_spec"]["link_data"]
+    assert len(ld["child_attachments"]) == 10 and "name" not in ld
+    assert sum("first 10 of 12" in n for n in r["notes"]) == 1

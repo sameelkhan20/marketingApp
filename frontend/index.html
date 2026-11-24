@@ -8,7 +8,7 @@
   <link rel="apple-touch-icon" href="/static/icon.svg?v=1" />
   <meta name="theme-color" content="#f0f2f5" />
   <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=11" />
+  <link rel="stylesheet" href="/static/styles.css?v=17" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -122,11 +122,15 @@
                 <div class="affix"><em>PKR</em><input name="budget_pkr" type="number" min="1000" step="500" value="100000" required /></div>
                 <small class="conv" id="conv-budget"></small>
               </label>
+              <label class="field" id="brand-field" hidden><span>Store</span><select name="brand_id" id="brand-select"></select></label>
               <label class="field"><span>Target country</span><select name="country" id="country"></select></label>
               <label class="field"><span>Product</span>
-                <input name="product" type="text" placeholder="Black biker leather jacket" required />
+                <input name="product" type="text" placeholder="e.g. Black biker leather jacket, 24-piece cutlery set" maxlength="200" required />
               </label>
-              <label class="field"><span>Type of jacket</span><select name="niche" id="niche"></select></label>
+              <label class="field"><span>Product category</span><select name="niche" id="niche"></select></label>
+              <label class="field" id="note-field"><span id="note-label">What is it exactly? <em class="opt">optional</em></span>
+                <input name="category_note" type="text" maxlength="200" placeholder="e.g. stainless steel cutlery for weddings and gifts" />
+              </label>
               <div class="field-row">
                 <label class="field"><span>Selling price</span>
                   <div class="affix"><em>USD</em><input name="price_usd" type="number" min="1" step="1" value="120" required /></div>
@@ -136,10 +140,23 @@
                   <div class="affix suffix"><input name="duration_days" type="number" min="3" max="90" value="30" required /><em>days</em></div>
                 </label>
               </div>
+              <details class="field-group sell" id="sell-box">
+                <summary class="group-title">Make it sell <span class="optional">recommended</span></summary>
+                <p class="hint" style="margin:0 0 10px">These facts make the ads specific. The AI only uses what you write here: it never invents discounts, reviews or delivery times. Your last answers for this store are filled in.</p>
+                <label class="field"><span>Offer</span><input name="offer" type="text" maxlength="200" placeholder="e.g. 15% off this week, free shipping, buy 2 get 10% off, free gift box" /></label>
+                <label class="field"><span>Why buy from you</span><input name="usp" type="text" maxlength="300" placeholder="e.g. real 304 stainless steel, hand-polished, made in Sialkot" /></label>
+                <div class="field-row">
+                  <label class="field"><span>Delivery time</span>
+                    <div class="affix suffix"><input name="delivery_days" type="number" min="0" max="90" placeholder="e.g. 7" /><em>days</em></div>
+                  </label>
+                  <label class="field"><span>Returns</span><input name="returns" type="text" maxlength="150" placeholder="e.g. 30-day easy returns" /></label>
+                </div>
+                <label class="field"><span>Reviews / social proof</span><input name="social_proof" type="text" maxlength="200" placeholder="e.g. 4.8 stars from 1,200 buyers" /></label>
+              </details>
               <div class="field-group">
                 <div class="group-title">For the profit figure <span class="optional">optional</span></div>
                 <div class="field-row">
-                  <label class="field"><span>Your cost per jacket</span>
+                  <label class="field"><span>Your cost per item</span>
                     <div class="affix"><em>USD</em><input name="unit_cost_usd" type="number" min="0" step="0.5" placeholder="0" /></div>
                   </label>
                   <label class="field"><span>Shipping per order</span>
@@ -195,12 +212,13 @@
               </div>
               <div class="toolbar">
                 <button id="btn-copy-plan" class="btn ghost" title="Start a new plan with the same inputs"><svg class="icon"><use href="#i-copy"/></svg>Copy</button>
-                <button id="btn-delete-plan" class="btn ghost danger-text" hidden><svg class="icon"><use href="#i-trash"/></svg>Delete</button>
+                <button id="btn-delete-plan" class="owner-only btn ghost danger-text" hidden><svg class="icon"><use href="#i-trash"/></svg>Delete</button>
                 <button id="btn-edit" class="btn"><svg class="icon"><use href="#i-pencil"/></svg>Edit</button>
                 <button id="btn-approve" class="btn primary"><svg class="icon"><use href="#i-check"/></svg>Approve plan</button>
-                <button id="btn-launch" class="btn primary" hidden>Create on Meta, paused</button>
+                <button id="btn-launch" class="owner-only btn primary" hidden>Create on Meta, paused</button>
               </div>
             </div>
+            <div id="policy" class="panel policy" hidden></div>
             <div id="launch-info" class="panel" hidden></div>
             <div id="readiness" class="panel" hidden></div>
             <div id="plan-view"></div>
@@ -229,7 +247,7 @@
                   </label>
                   <div class="field-row tight">
                     <label class="field grow"><span>Brand style</span>
-                      <input type="text" id="brand-style" placeholder="Dark moody tones, urban, no bright colours" />
+                      <input type="text" id="brand-style" placeholder="e.g. Clean and bright, warm tones, no busy backgrounds" />
                     </label>
                     <button type="button" id="btn-brand-save" class="btn">Save</button>
                   </div>
@@ -310,7 +328,7 @@
                 <label class="field"><span>Max budget change per action</span>
                   <div class="affix suffix"><input id="auto-max-pct" type="number" min="1" max="50" value="20" /><em>%</em></div>
                 </label>
-                <button id="btn-auto-save" class="btn primary">Save</button>
+                <button id="btn-auto-save" class="btn primary owner-only">Save</button>
               </div>
             </div>
             <div class="card">
@@ -372,7 +390,7 @@
               <p class="muted">When this month's estimated AI cost reaches the budget, new AI work pauses: plans use the template, images are refused and alerts keep their built-in advice. 0 turns the limit off.</p>
               <div class="field-row tight end">
                 <label class="field"><span>Budget per month</span><div class="affix"><em>USD</em><input name="budget_usd" type="number" min="0" step="1" /></div></label>
-                <button type="submit" class="btn primary">Save</button>
+                <button type="submit" class="btn primary owner-only">Save</button>
               </div>
               <details class="prices">
                 <summary>Price table</summary>
@@ -452,9 +470,8 @@
                 <textarea name="creative_image_urls" rows="2" placeholder="https://…/jacket1.jpg, https://…/jacket2.jpg"></textarea>
               </label>
               <div class="form-actions">
-                <button type="button" id="btn-oauth" class="btn" hidden>Connect with Facebook</button>
                 <button type="button" id="btn-meta-check" class="btn">Check connection</button>
-                <button type="submit" class="btn primary">Save</button>
+                <button type="submit" class="btn primary owner-only">Save</button>
               </div>
             </form>
 
@@ -482,8 +499,8 @@
                     <li>Google then opens a page that does not load. Copy its whole address from the address bar and paste it below.</li>
                   </ol>
                   <div class="toolbar">
-                    <button type="button" class="btn small" data-connect="gmail">Sign in with Google</button>
-                    <button type="button" class="btn small ghost" data-disconnect="gmail" hidden>Go back to the server's Gmail</button>
+                    <button type="button" class="btn small owner-only" data-connect="gmail">Sign in with Google</button>
+                    <button type="button" class="btn small ghost owner-only" data-disconnect="gmail" hidden>Go back to the server's Gmail</button>
                   </div>
                   <div class="paste" hidden>
                     <div class="field-row tight"><input type="text" placeholder="Paste the address here: http://127.0.0.1:8765/?state=…" /><button type="button" class="btn primary" data-finish="gmail">Finish</button></div>
@@ -496,8 +513,8 @@
                 <p class="muted" id="hf-state">Loading</p>
                 <div class="connect" data-svc="higgsfield">
                   <div class="toolbar">
-                    <button type="button" class="btn small" data-connect="higgsfield">Connect Higgsfield</button>
-                    <button type="button" class="btn small ghost" data-disconnect="higgsfield" hidden>Disconnect</button>
+                    <button type="button" class="btn small owner-only" data-connect="higgsfield">Connect Higgsfield</button>
+                    <button type="button" class="btn small ghost owner-only" data-disconnect="higgsfield" hidden>Disconnect</button>
                   </div>
                   <div class="paste" hidden>
                     <p class="hint">Allow access on Higgsfield. The browser then lands on a page that does not load: copy its whole address and paste it here.</p>
@@ -508,13 +525,47 @@
             </div>
           </div>
 
+          <div class="card owner-only" id="brands-card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">Stores</div>
+                <p class="hint" style="margin:2px 0 0">Each store (Meta business) has its own token, ad account, page, pixel and store link. The main store is the one set above. Every plan picks its store, and its campaign runs on that store's ad account.</p>
+              </div>
+              <button type="button" class="btn small" id="btn-brand-new">Add a store</button>
+            </div>
+            <ul class="rows" id="brand-list"></ul>
+            <form id="brand-form" class="brand-form" hidden>
+              <div class="card-title" id="brand-form-title">New store</div>
+              <input type="hidden" name="id" />
+              <label class="field"><span>Store name</span><input name="name" type="text" maxlength="80" placeholder="e.g. Cutlery Nest" required /></label>
+              <label class="field"><span>Access token</span><input name="meta_access_token" type="password" autocomplete="off" placeholder="EAA… (a System User token from this store's business)" /></label>
+              <div class="field-row">
+                <label class="field"><span>Ad account id</span><input name="meta_ad_account_id" type="text" placeholder="act_1234567890" /></label>
+                <label class="field"><span>Page id</span><input name="meta_page_id" type="text" /></label>
+              </div>
+              <div class="field-row">
+                <label class="field"><span>Pixel or dataset id</span><input name="meta_pixel_id" type="text" /></label>
+                <label class="field"><span>Store URL</span><input name="store_url" type="url" placeholder="https://yourstore.com" /></label>
+              </div>
+              <label class="field"><span>Fallback image URLs, comma separated</span><textarea name="creative_image_urls" rows="2"></textarea></label>
+              <div class="brand-check muted" id="brand-check"></div>
+              <div class="form-actions">
+                <button type="button" class="btn ghost danger-text" id="btn-brand-delete" hidden>Delete store</button>
+                <button type="button" class="btn" id="btn-brand-cancel">Cancel</button>
+                <button type="button" class="btn" id="btn-brand-winners" title="Reads this store's ad history and keeps its best-selling ads for the planner">Sync best ads</button>
+                <button type="button" class="btn" id="btn-brand-check">Check connection</button>
+                <button type="submit" class="btn primary">Save store</button>
+              </div>
+            </form>
+          </div>
+
           <div class="card flush">
             <div class="card-head padded">
               <div>
                 <div class="card-title">Account history by country</div>
                 <p class="hint" id="sync-info">Last two years. These figures replace the benchmarks in the estimator for every country listed</p>
               </div>
-              <button id="btn-sync" class="btn"><svg class="icon"><use href="#i-refresh"/></svg>Sync from Meta</button>
+              <button id="btn-sync" class="btn owner-only"><svg class="icon"><use href="#i-refresh"/></svg>Sync from Meta</button>
             </div>
             <table class="table" id="stats-table">
               <thead><tr><th>Country</th><th class="num">Spend</th><th class="num">Impressions</th><th class="num">Clicks</th><th class="num">Purchases</th><th class="num">CPM</th><th class="num">CTR</th><th class="num">CVR</th><th>Confidence</th></tr></thead>
@@ -538,6 +589,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=20"></script>
 </body>
 </html>

@@ -93,17 +93,18 @@ def complete_launch(session: Session, launch: Launch, plan: Plan, po: PlanOutcom
     from_history = str((plan.estimate or {}).get("source", "")).startswith("account_history")
     # account history already reflects real results: correcting it again would double count
     if not from_history and po.days_active >= MIN_DAYS_FOR_CALIBRATION and po.predicted_so_far >= 0.5:
-        _update_calibration(session, plan.country, po.ratio * used)
+        _update_calibration(session, cal_key(plan.country, plan.brand_id or 0, plan.niche), po.ratio * used)
     po.summary = perf["text"]
     # at most 6 result rules per market: the new ones replace the oldest, weakest ones
     tag = f"[result {plan.country} {plan.niche}]"
     with session.no_autoflush:
         same = sorted((x for x in session.scalars(select(LearnedRule).where(LearnedRule.active == 1))
-                       if x.rule.startswith(tag)), key=lambda x: (x.weight, x.id))
+                       if x.rule.startswith(tag) and (x.brand_id or 0) == (plan.brand_id or 0)),
+                      key=lambda x: (x.weight, x.id))
     for x in same[:max(0, len(same) + len(rules) - 6)]:
         x.active = 0
     for r in rules:
-        session.add(LearnedRule(rule=r, source_plan_id=plan.id, weight=1.2))
+        session.add(LearnedRule(rule=r, source_plan_id=plan.id, weight=1.2, niche=plan.niche, brand_id=plan.brand_id or 0))
     po.rules_added = rules
     _reweight_rules(session, po.verdict, plan)
     session.commit()
@@ -114,9 +115,10 @@ def _update_calibration(session: Session, country: str, ratio: float | None) -> 
     if ratio is None:
         return
     ratio = max(0.5, min(2.0, ratio))  # a launch with no sales counts as the lowest ratio, not as nothing
-    cal = session.get(Calibration, country.upper())
+    key = country if "|" in country else country.upper()
+    cal = session.get(Calibration, key)
     if not cal:
-        cal = Calibration(country=country.upper(), factor=1.0, samples=0)
+        cal = Calibration(country=key, factor=1.0, samples=0)
         session.add(cal)
     # Mean of a 1.0 prior (one pseudo-sample) and every observed ratio, each weighted equally.
     n = cal.samples
@@ -126,8 +128,21 @@ def _update_calibration(session: Session, country: str, ratio: float | None) -> 
     cal.updated_at = datetime.utcnow()
 
 
-def calibration_factor(session: Session, country: str) -> tuple[float, int]:
-    cal = session.get(Calibration, country.upper())
+def cal_key(country: str, brand_id: int = 0, niche: str = "leather_jackets") -> str:
+    """Calibration is kept per store and category. The main store's jackets keep the plain country key
+    used before categories existed, so their learned corrections carry on."""
+    from .history import HISTORY_NICHES
+    from .benchmarks import CATEGORIES
+    if niche not in CATEGORIES:
+        niche = "leather_jackets"  # plans from before categories were jacket plans
+    c = country.upper()
+    if not brand_id and (niche or "leather_jackets") in HISTORY_NICHES:
+        return c
+    return f"{c}|{int(brand_id or 0)}|{niche}"
+
+
+def calibration_factor(session: Session, country: str, brand_id: int = 0, niche: str = "leather_jackets") -> tuple[float, int]:
+    cal = session.get(Calibration, cal_key(country, brand_id, niche))
     return (cal.factor, cal.samples) if cal else (1.0, 0)
 
 
@@ -199,22 +214,27 @@ def _ai_rules(plan: Plan, po: PlanOutcome, perf: dict) -> list[str]:
     )
     rules = llm.structured("You turn finished Meta campaign results into planning rules.", prompt, schema,
                            "Result rules", effort="medium", max_tokens=2000)["rules"]
+    import re
     tag = f"[result {plan.country} {plan.niche}]"
-    return [r if r.startswith("[result") else f"{tag} {r}" for r in (str(x).strip() for x in rules) if r][:3]
+    clean = (re.sub(r"^\[result[^\]]*\]\s*", "", str(x).strip(), flags=re.I) for x in rules)
+    return [f"{tag} {r}" for r in clean if r][:3]  # always the standard tag, whatever the AI wrote
 
 
 def _reweight_rules(session: Session, verdict: str, plan: Plan) -> None:
     """Only rules that shaped this plan (existed when it was generated) share its result."""
     from .learning import rules_in_effect_for
-    from .learning import RETIRE_BELOW, applies_to
+    from .learning import RETIRE_BELOW, rule_fits
     delta = {"ahead": 0.2, "on_track": 0.1, "behind": -0.2}.get(verdict, 0)
     if not delta:
         return
-    for r in rules_in_effect_for(session, plan.created_at):
+    used = (plan.estimate or {}).get("rules_used")
+    rows = (list(session.scalars(select(LearnedRule).where(LearnedRule.id.in_(used)))) if used is not None
+            else rules_in_effect_for(session, plan.created_at))  # older plans: the rules that existed then
+    for r in rows:
         if r.source_plan_id == plan.id and r.rule.startswith("[result"):
             continue  # rules this very launch just produced
-        if not applies_to(r.rule, plan.country, plan.niche):
-            continue  # a rule for another market did not shape this plan
+        if not rule_fits(r, plan.country, plan.niche, plan.brand_id or 0):
+            continue  # a rule for another market or store did not shape this plan
         r.weight = round(min(3.0, max(0.1, r.weight + delta)), 2)
         if r.weight < RETIRE_BELOW:
             r.active = 0  # kept losing: stop using it (it stays visible as inactive)

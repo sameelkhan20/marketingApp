@@ -297,7 +297,7 @@ def make_picture(reference_urls: list[str], prompt: str, aspect_ratio: str | Non
                                   "count": 1, "use_unlim": False}
         if medias:
             params["medias"] = medias
-        ctx = "Meta ad images for a jackets / upperwear brand"
+        ctx = "Meta ad images for an online store"
         try:
             try:
                 res = mcp.tool("generate_image", {"params": params, "context": ctx})

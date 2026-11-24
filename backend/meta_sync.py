@@ -92,3 +92,62 @@ def sync_account(session: Session, token: str, account_id: str, years: int = 2) 
 
     return {"account": info, "currency": currency, "rows": len(rows), "countries": len(stats),
             "since": since.isoformat(), "until": until.isoformat()}
+
+
+# ---------- your winners: the store's best past ads, for the planner ----------
+
+MIN_PURCHASES = 3
+TOP_N = 8
+
+
+def top_ads(rows: list[dict], currency: str) -> list[dict]:
+    """Ads that sold, best first: most purchases, then the lowest cost per purchase."""
+    out = []
+    for r in rows:
+        pur, rev = _purchases(r)
+        if pur < MIN_PURCHASES:
+            continue
+        spend = to_usd(float(r.get("spend", 0) or 0), currency)
+        rev = to_usd(rev, currency)
+        imp = int(r.get("impressions", 0) or 0)
+        out.append({"ad_id": r.get("ad_id", ""), "name": (r.get("ad_name") or "")[:120],
+                    "adset": (r.get("adset_name") or "")[:120], "purchases": pur, "spend_usd": round(spend, 2),
+                    "cpa_usd": round(spend / pur, 2), "roas": round(rev / spend, 2) if spend > 0 and rev > 0 else 0,
+                    "ctr": round(int(r.get("inline_link_clicks", 0) or 0) / imp, 4) if imp else 0})
+    out.sort(key=lambda a: (-a["purchases"], a["cpa_usd"]))
+    return out[:TOP_N]
+
+
+def sync_winners(session: Session, brand_id: int, years: int = 2) -> dict:
+    """Read the store's ad history and keep its best ads (with their copy) for the planner."""
+    import json
+
+    from . import brands
+    vals = brands.settings_for(session, brand_id)
+    client = MetaClient(vals["meta_access_token"])
+    act = ad_account_path(vals["meta_ad_account_id"])
+    currency = client.account(act).get("currency", "USD")
+    if currency not in ("USD", "PKR"):
+        raise MetaError(f"Ad account currency {currency} is not supported yet (USD or PKR only).")
+    until = date.today()
+    since = until - timedelta(days=365 * years)
+    winners = top_ads(client.ad_insights(act, since.isoformat(), until.isoformat()), currency)
+    for w in winners:  # the copy that sold; one failure does not stop the rest
+        try:
+            w.update(client.ad_copy(w["ad_id"]))
+        except MetaError:
+            pass
+    brands.set_fields(session, brand_id, {"winners": json.dumps(winners)})
+    return {"winners": len(winners), "since": since.isoformat(), "until": until.isoformat()}
+
+
+def winners_for(session: Session, brand_id: int) -> list[dict]:
+    import json
+
+    from . import brands
+    try:
+        raw = brands.settings_for(session, brand_id).get("winners") or "[]"
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except (ValueError, brands.BrandError):
+        return []

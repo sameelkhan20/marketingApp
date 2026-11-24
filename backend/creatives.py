@@ -2,7 +2,7 @@
 
 Prompt = plan creative's visual_prompt + niche guidance + brand style + safety lines.
 The product photo (settings.product_photo) is passed as the reference image so the
-jacket stays accurate. Files live in data/media and are served at /media/<name>.
+product stays accurate. Files live in data/media and are served at /media/<name>.
 """
 
 import secrets
@@ -15,7 +15,16 @@ from .benchmarks import get_niche
 from .config import MEDIA_DIR
 from .db import Creative, Plan
 
-ASPECT_FROM_FORMAT = {"9:16": "9:16", "4:5": "4:5", "1:1": "1:1"}
+ASPECT_FROM_FORMAT = {"9:16": "9:16", "4:5": "4:5", "1:1": "1:1", "Carousel": "1:1", "carousel": "1:1"}
+# what the next card of a carousel shows, so the cards are not five copies of one picture
+CAROUSEL_VIEWS = ["the whole product, front view", "a back or side view", "a close-up of the material and details",
+                  "the product in use", "the product with its packaging, ready as a gift", "the product next to "
+                  "everyday objects for scale", "a different colour or styling of the same product", "a flat-lay of the product"]
+MAX_CARDS = 10
+
+
+def is_carousel(fmt: str) -> bool:
+    return "carousel" in (fmt or "").lower()
 SAFETY = ("Photorealistic advertising photo. No text, no watermarks, no logos, no celebrity likeness, "
           "no copyrighted characters. Keep the product exactly as in the reference photo.")
 
@@ -35,8 +44,8 @@ def build_prompt(plan: Plan, creative: dict, brand_style: str) -> str:
     ]
     if brand_style:
         parts.append(f"Brand style: {brand_style}.")
-    if plan.niche == "celebrity_jackets":
-        parts.append("Do not depict any real person, actor or film still; an anonymous model only.")
+    if niche.get("image_note"):
+        parts.append(niche["image_note"])
     parts.append(SAFETY)
     return " ".join(parts)
 
@@ -47,9 +56,15 @@ def generate_for_plan(session: Session, plan: Plan, creative_index: int, aspect:
     if not 0 <= creative_index < len(creatives):
         raise ValueError("creative_index out of range")
     c = creatives[creative_index]
-    vals = settings_store.get_all(session)
+    from . import brands
+    vals = brands.settings_for(session, plan.brand_id or 0)  # this store's photo and style
     aspect = aspect or aspect_for(c.get("format", ""))
     prompt = build_prompt(plan, c, vals.get("brand_style", ""))
+    if is_carousel(c.get("format", "")):
+        n = session.query(Creative).filter(Creative.plan_id == plan.id, Creative.creative_index == creative_index).count()
+        if n >= MAX_CARDS:
+            raise ValueError(f"A carousel has at most {MAX_CARDS} cards; delete one first")
+        prompt += f" This is card {n + 1} of a carousel: show {CAROUSEL_VIEWS[n % len(CAROUSEL_VIEWS)]}."
 
     reference = None
     if vals.get("product_photo"):

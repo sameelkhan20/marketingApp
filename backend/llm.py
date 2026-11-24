@@ -43,14 +43,15 @@ def model() -> str:
 
 
 def structured(system: str, prompt: str, schema: dict, feature: str, effort: str = "medium",
-               max_tokens: int = 16000) -> dict:
-    """Raises usage.BudgetExceeded when the monthly budget is used up, LLMError on any other failure."""
+               max_tokens: int = 16000, model: str | None = None) -> dict:
+    """Raises usage.BudgetExceeded when the monthly budget is used up, LLMError on any other failure.
+    model: a Gemini model for this call only (plans use a stronger one); ignored for Claude."""
     if not configured():
         raise LLMError("No AI provider: set ANTHROPIC_API_KEY or a Gemini key in .env")
     usage.ensure_budget(feature.lower())
     if provider() == "anthropic":
         return _claude(system, prompt, schema, feature, effort, max_tokens)
-    return _gemini(system, prompt, schema, feature, max_tokens)
+    return _gemini(system, prompt, schema, feature, max_tokens, model or GEMINI_MODEL)
 
 
 # ---------------- Claude ----------------
@@ -84,7 +85,7 @@ def _claude(system: str, prompt: str, schema: dict, feature: str, effort: str, m
 
 # ---------------- Gemini ----------------
 
-def _gemini(system: str, prompt: str, schema: dict, feature: str, max_tokens: int) -> dict:
+def _gemini(system: str, prompt: str, schema: dict, feature: str, max_tokens: int, model: str = GEMINI_MODEL) -> dict:
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": prompt + "\n\nAnswer with one JSON object only, matching "
@@ -98,7 +99,7 @@ def _gemini(system: str, prompt: str, schema: dict, feature: str, max_tokens: in
         if attempt:
             usage.ensure_budget(feature.lower())  # the retry is billed too
         try:
-            r = requests.post(f"{GEMINI_BASE}/models/{GEMINI_MODEL}:generateContent",
+            r = requests.post(f"{GEMINI_BASE}/models/{model}:generateContent",
                               headers={"x-goog-api-key": GEMINI_API_KEY}, json=body, timeout=120)
         except requests.RequestException as ex:
             raise LLMError(f"Gemini network error: {ex}") from ex
@@ -107,7 +108,7 @@ def _gemini(system: str, prompt: str, schema: dict, feature: str, max_tokens: in
         except ValueError:
             data = {}
         meta = data.get("usageMetadata") or {}
-        usage.record("gemini", GEMINI_MODEL, feature, int(meta.get("promptTokenCount") or 0),
+        usage.record("gemini", model, feature, int(meta.get("promptTokenCount") or 0),
                      int(meta.get("candidatesTokenCount") or 0) + int(meta.get("thoughtsTokenCount") or 0),
                      ok=r.status_code < 400, error="" if r.status_code < 400 else r.text[:300])
         if r.status_code >= 400:

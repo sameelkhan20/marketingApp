@@ -10,7 +10,7 @@ import time
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from ..db import TokenBlacklist, User, get_session
 from .security import ACCESS_TOKEN_SECRET, ALGORITHM
@@ -72,7 +72,7 @@ def user_from_token(token: str) -> dict:
         raise CREDENTIALS_EXCEPTION
 
     with get_session() as s:
-        user = s.scalar(select(User).where(User.email == email))
+        user = s.scalar(select(User).where(func.lower(User.email) == email.lower()))
         if user is None:
             raise CREDENTIALS_EXCEPTION
         if not user.is_active:

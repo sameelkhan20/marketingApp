@@ -130,7 +130,7 @@ def test_imagegen_uses_higgsfield(monkeypatch, tmp_path):
     ref.write_bytes(b"photo")
     assert imagegen.status()["provider"] == "higgsfield"
     assert imagegen.generate("street shot", reference=str(ref), aspect="9:16") == b"IMG"
-    assert got["ref"] == (b"photo", "image/png") and "garment" in got["prompt"] and "no logos" in got["prompt"]
+    assert got["ref"] == (b"photo", "image/png") and "Show exactly this product" in got["prompt"] and "no logos" in got["prompt"]
 
 
 def test_imagegen_off_when_not_connected():

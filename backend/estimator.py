@@ -56,6 +56,7 @@ def estimate_orders(
     unit_cost_usd: float = 0.0,
     shipping_usd: float = 0.0,
     start: date | None = None,
+    delivery_days: int = 0,
 ) -> Estimate:
     """calibration: (factor, samples) from past launches in this country; multiplies the order estimate."""
     c = get_country(country)
@@ -64,7 +65,7 @@ def estimate_orders(
 
     cpm = c["cpm_usd"] * n["cpm"]
     ctr = c["ctr"] * n["ctr"]
-    cvr = c["cvr"] * n["cvr"] * price_multiplier(price_usd)
+    cvr = c["cvr"] * n["cvr"] * price_multiplier(price_usd, n.get("typical_price", 150))
     source = "benchmark"
     confidence = "low"
 
@@ -76,14 +77,14 @@ def estimate_orders(
         source = overrides.get("source", "account_history")
         confidence = overrides.get("confidence", "high")
 
-    # Season: auction prices and jacket demand over the campaign's own days (it starts after launch).
+    # Season: auction prices and this category's demand over the campaign's own days (it starts after launch).
     from .seasonality import season_factors
-    season = season_factors(country, start or (date.today() + timedelta(days=1)), duration_days)
+    season = season_factors(country, start or (date.today() + timedelta(days=1)), duration_days, niche, delivery_days)
     cpm *= season["cpm"]
     cvr *= season["cvr"]
     if season["label"] == "off season":
-        warnings.append(f"Off season for jackets in {c['name']}: fewer buyers than usual. "
-                        "A shorter test or a lighter product converts better now.")
+        warnings.append(f"Off season for {n['label'].lower()} in {c['name']}: fewer buyers than usual. "
+                        "A shorter test or a stronger offer converts better now.")
     for e in season["events"]:
         warnings.append(f"{e['name']} on {e['date']} falls in this campaign. {e['note']}.")
 

@@ -9,7 +9,14 @@ from .benchmarks import get_country, get_niche, price_multiplier
 from .db import AccountStat, get_session
 
 
-def account_overrides(country: str, niche: str, price_usd: float = 120.0) -> dict | None:
+# The synced history comes from the main store's ad account, which sells jackets. It only stands in for
+# benchmarks for plans of that store in those categories; other stores and categories use benchmarks.
+HISTORY_NICHES = {"leather_jackets", "celebrity_jackets"}
+
+
+def account_overrides(country: str, niche: str, price_usd: float = 120.0, brand_id: int = 0) -> dict | None:
+    if brand_id or (niche or "").lower() not in HISTORY_NICHES:
+        return None
     with get_session() as s:
         st = s.get(AccountStat, country.upper())
         if not st or st.impressions < 10_000:
@@ -17,13 +24,14 @@ def account_overrides(country: str, niche: str, price_usd: float = 120.0) -> dic
 
         bench = get_country(country)
         n = get_niche(niche)
-        bench_cvr = bench["cvr"] * n["cvr"] * price_multiplier(price_usd)
+        typ = n.get("typical_price", 150)
+        bench_cvr = bench["cvr"] * n["cvr"] * price_multiplier(price_usd, typ)
 
-        # The account's CVR comes from its own average order: scale it for a pricier or cheaper jacket.
+        # The account's CVR comes from its own average order: scale it for a pricier or cheaper product.
         account_cvr = st.cvr
         if st.purchases > 0 and st.revenue_usd > 0:
             avg_price = st.revenue_usd / st.purchases
-            account_cvr = st.cvr * price_multiplier(price_usd) / max(price_multiplier(avg_price), 1e-6)
+            account_cvr = st.cvr * price_multiplier(price_usd, typ) / max(price_multiplier(avg_price, typ), 1e-6)
         if st.purchases >= 20 and account_cvr > 0:
             cvr = account_cvr
         elif st.purchases > 0 and account_cvr > 0:

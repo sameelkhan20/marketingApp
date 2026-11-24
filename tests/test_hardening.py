@@ -141,7 +141,7 @@ def test_move_budget_rollback_failure_is_reported(plan):
 
 # ---------- launch ----------
 
-def test_double_launch_is_refused(client, auth, plan, monkeypatch):
+def test_double_launch_is_refused(client, auth, plan, monkeypatch, active_meta):
     from backend import main
     with get_session() as s:
         settings_store.set_many(s, {"meta_access_token": "EAAtest", "meta_ad_account_id": "act_1", "meta_page_id": "1",
@@ -163,7 +163,7 @@ def test_double_launch_is_refused(client, auth, plan, monkeypatch):
                                     "store_url": "", "creative_image_urls": ""})
 
 
-def test_failed_launch_releases_the_plan(client, auth, plan, monkeypatch):
+def test_failed_launch_releases_the_plan(client, auth, plan, monkeypatch, active_meta):
     from backend import main
     from backend.meta_client import MetaError
     monkeypatch.setattr(main.readiness, "check_plan", lambda s, p, live=False: {"ready": True, "checks": []})
