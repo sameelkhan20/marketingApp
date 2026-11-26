@@ -145,6 +145,14 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
     page = settings.get("meta_page_id", "")
     link = settings.get("store_url", "")
     images = [u.strip() for u in settings.get("creative_image_urls", "").split(",") if u.strip()]
+    # a catalogue plan: Meta shows products from a product set, with the catalogue's own pictures
+    catalogue = plan_inputs.get("scope") == "catalogue"
+    product_set = str(plan_inputs.get("product_set_id") or "")
+    catalog_id = str(plan_inputs.get("catalog_id") or "")
+    cap_pkr = float(plan_inputs.get("max_cpa_pkr") or 0)  # the owner's limit of ad cost per order
+    if catalogue and not (product_set and catalog_id):
+        raise MetaError("This is a catalogue plan, but the catalogue could not be read: add the catalog_management "
+                        "permission to the Meta token, then make the plan again.")
 
     plan_adsets = list(plan_content.get("ad_sets", []))
     notes: list[str] = []
@@ -179,7 +187,8 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
     end_time = int(time.time()) + days * 86400
 
     campaign_id = client.create_campaign(act, f"[Planner #{plan_id}] {product} - {country}",
-                                         is_adset_budget_sharing_enabled=False)
+                                         is_adset_budget_sharing_enabled=False,
+                                         catalog_id=catalog_id if catalogue else "")
 
     adsets: list[dict] = []
     try:
@@ -201,6 +210,17 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
                 fields["optimization_goal"] = "LINK_CLICKS"
                 if i == 0:
                     notes.append("No pixel configured: ad sets optimise for LINK_CLICKS instead of PURCHASE.")
+            if catalogue:  # the ad set promotes the product set; the pixel counts its purchases (as in Ads Manager)
+                fields["promoted_object"] = {"product_set_id": product_set,
+                                             **({"pixel_id": pixel, "custom_event_type": "PURCHASE"} if pixel else {})}
+            if cap_pkr and pixel:  # Meta's own cost cap: it aims to keep the average cost per purchase at the limit
+                fields["bid_strategy"] = "COST_CAP"
+                fields["bid_amount"] = budget_minor_units(cap_pkr if currency == "PKR" else cap_pkr / PKR_PER_USD, currency)
+                if i == 0:
+                    notes.append(f"Cost cap set on Meta: about PKR {cap_pkr:,.0f} per purchase. Meta keeps to it on "
+                                 "average; if it is too low, the ads spend less than the budget.")
+            elif cap_pkr and i == 0:
+                notes.append("Your cost limit could not be set on Meta without a pixel: only the app's alerts use it.")
             adset_id = client.create_adset(act, **fields)
             adsets.append({"id": adset_id, "name": fields["name"], "daily_budget": round(daily, 2), "currency": currency})
     except MetaError as ex:
@@ -220,6 +240,32 @@ def launch_plan(plan_inputs: dict, plan_content: dict, settings: dict, plan_id: 
     ads: list[dict] = []
     if not page or not link:
         notes.append("No page id or store URL configured: campaign and ad sets created, ads skipped.")
+    elif catalogue:
+        for adset in adsets:
+            for j, cr in enumerate(plan_content.get("creatives", [])):
+                cta = CTA_MAP.get(cr.get("cta", "").lower(), "SHOP_NOW")
+                template = {"link": link, "message": cr.get("primary_text", ""),
+                            "name": cr.get("headline") or "{{product.name}}", "description": "{{product.price}}",
+                            "call_to_action": {"type": cta}, "multi_share_end_card": False}
+                try:
+                    creative_id = client.create_creative(
+                        act, name=f"{adset['name']} / catalogue {j + 1}", product_set_id=product_set,
+                        object_story_spec={"page_id": page, "template_data": template})
+                    ad_id = client.create_ad(act, f"{adset['name']} - C{j + 1}", adset["id"], creative_id)
+                    ads.append({"id": ad_id, "adset_id": adset["id"], "creative_id": creative_id,
+                                "creative_index": j, "name": f"{adset['name']} - C{j + 1}"})
+                except MetaRateLimited:
+                    try:
+                        client.delete_now(campaign_id) if hasattr(client, "delete_now") else \
+                            client.update_object(campaign_id, status="DELETED")
+                        cleanup = "the half-built campaign was deleted"
+                    except MetaError:
+                        cleanup = f"delete campaign {campaign_id} in Ads Manager"
+                    raise MetaError(f"Meta asked the app to slow down while creating ads; {cleanup}. "
+                                    "Launch again after the pause.")
+                except MetaError as ex:
+                    notes.append(f"Catalogue ad {j + 1} in '{adset['name']}' failed: {ex}")
+        notes.append("Catalogue ads: Meta picks the products for each person and uses the catalogue's own pictures.")
     elif not images and not hashes:
         notes.append("No creatives: generate/upload images on the plan or set image URLs on the Connections page. Ads skipped.")
     else:

@@ -183,6 +183,7 @@ function formInputs() {
     social_proof: (fd.get("social_proof") || "").trim(),
     cod: fd.get("country") === "PK" && !!$("#plan-form").elements.cod.checked,
     landing_url: (fd.get("landing_url") || "").trim(),
+    extra: (fd.get("extra") || "").trim(),
   };
 }
 
@@ -190,7 +191,7 @@ function fillForm(inputs) {
   const f = $("#plan-form");
   f.elements.unit_cost_usd.value = ""; f.elements.shipping_usd.value = ""; f.elements.category_note.value = "";
   f.elements.landing_url.value = "";
-  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
+  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof", "extra"]) f.elements[k].value = "";
   f.elements.price_usd.dataset.touched = "1";  // a saved plan's price is a real choice
   f.elements.cod.checked = false;
   for (const [k, v] of Object.entries(inputs)) {
@@ -198,6 +199,7 @@ function fillForm(inputs) {
     if (k === "cod") f.elements.cod.checked = !!v;
     else f.elements[k].value = (k === "delivery_days" && !v) ? "" : (v ?? "");
   }
+  selectCategory(inputs.niche, inputs.category_note || "");
   updateNoteField();
   updateCodLine();
 }
@@ -241,14 +243,20 @@ function newPlan() {
   f.elements.category_note.value = "";
   f.elements.landing_url.value = "";
   delete f.elements.price_usd.dataset.touched;  // a new plan gets the category's usual price again
+  delete f.elements.niche.dataset.touched;
   $("#plan-card").hidden = true;
   $("#estimate-card").hidden = true;
   $("#estimate-empty").hidden = false;
   setFormLocked(false);
   updateConversions();
   if (f.elements.country.options.length) liveEstimate();  // the defaults already make an estimate
-  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
+  for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof", "extra"]) f.elements[k].value = "";
   setTimeout(prefillBrief, 0);
+  loadProductPick().catch(() => {});
+  applyStoreCategory().catch(() => {});
+  $("#auto-card").hidden = false;
+  $("#auto-why").hidden = true;
+  showPlanTop();
 }
 
 // Open a saved plan on the plan page, with the page title naming it.
@@ -274,6 +282,7 @@ function showView(name) {
   $("#page-title").textContent = PAGES[name][0];
   $("#page-sub").textContent = PAGES[name][1];
   if (name === "plan" && currentPlan) setPlanTitle(currentPlan);
+  if (name === "plan" && !currentPlan && tokens.access) loadProductPick().catch(() => {});
   $("#btn-new-plan").hidden = !(name === "plan" && currentPlan);
   $("#sidebar").classList.remove("open");
   const loaders = { history: loadHistory, rules: loadRules, meta: loadMeta, monitor: loadMonitor, activity: loadActivity,
@@ -303,9 +312,8 @@ async function init() {
     .map(([code, name]) => `<option value="${code}" ${code === "US" ? "selected" : ""}>${name}</option>`)
     .join("");
   CATEGORIES = meta.categories || Object.entries(meta.niches).map(([key, label]) => ({ key, label, group: "Products" }));
-  const groups = [...new Set(CATEGORIES.map((c) => c.group))];
-  $("#niche").innerHTML = groups.map((g) => `<optgroup label="${esc(g)}">${CATEGORIES.filter((c) => c.group === g)
-    .map((c) => `<option value="${esc(c.key)}" ${c.key === meta.default_niche ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</optgroup>`).join("");
+  renderNicheOptions([]);
+  selectCategory(meta.default_niche, "");
   updateNoteField();
   const fxi = meta.fx || {};
   const when = fxi.updated ? new Date(fxi.updated).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
@@ -352,13 +360,42 @@ function updateCodLine() {
   if (!pk) f.elements.cod.checked = false;
 }
 $("#plan-form").addEventListener("change", (ev) => {
-  if (ev.target.name === "niche") onCategoryChange();
+  if (ev.target.name === "niche") {
+    if (ev.isTrusted) ev.target.dataset.touched = "1";
+    const o = ev.target.selectedOptions[0], note = $("#plan-form").elements.category_note;
+    if (o && o.dataset.note) note.value = o.dataset.note;
+    else if (SITE_CATS.some((c) => c.name === note.value)) note.value = "";
+    onCategoryChange();
+  }
   if (ev.target.name === "country") updateCodLine();
   clearTimeout(estTimer); estTimer = setTimeout(liveEstimate, 150);
 });
 $("#plan-form").elements.price_usd.addEventListener("input", (ev) => { ev.target.dataset.touched = "1"; });
 
 let CATEGORIES = [];
+let SITE_CATS = [];
+
+// The category list: the store's own categories (from its site) first, then every app category.
+// A store category carries the app category it counts as (for season and price estimates) and its own name.
+function renderNicheOptions(site) {
+  const sel = $("#niche"), f = $("#plan-form");
+  const cur = sel.value, curNote = f.elements.category_note.value;
+  SITE_CATS = site || [];
+  const groups = [...new Set(CATEGORIES.map((c) => c.group))];
+  const own = SITE_CATS.length ? `<optgroup label="Your store">${SITE_CATS.map((c) =>
+    `<option value="${esc(c.niche)}" data-note="${esc(c.name)}">${esc(c.name)}</option>`).join("")}</optgroup>` : "";
+  sel.innerHTML = own + groups.map((g) => `<optgroup label="${esc(g === "Other" && SITE_CATS.length ? "Other categories" : g)}">${
+    CATEGORIES.filter((c) => c.group === g).map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("")}</optgroup>`).join("");
+  if (cur) selectCategory(cur, curNote);
+}
+
+// Show the right option: a store category by its name, else the plain app category.
+function selectCategory(niche, note) {
+  const opts = [...$("#niche").options];
+  let i = note ? opts.findIndex((o) => o.dataset.note === note) : -1;
+  if (i < 0) i = opts.findIndex((o) => o.value === niche && !o.dataset.note);
+  if (i >= 0) $("#niche").selectedIndex = i;
+}
 // "Other" needs the user's words; for the rest they are an optional extra for the AI.
 function updateNoteField() {
   const other = $("#plan-form").elements.niche.value === "other";
@@ -389,6 +426,7 @@ function startFromCurrentInputs() {
   $("#btn-new-plan").hidden = true;
   $("#page-title").textContent = PAGES.plan[0];
   $("#page-sub").textContent = PAGES.plan[1];
+  loadProductPick().catch(() => {});
 }
 
 async function liveEstimate() {
@@ -472,12 +510,41 @@ function setPlanTitle(plan) {
 const NEXT_STEP = {
   draft: "Read the plan below. Change anything with Edit, then approve it.",
   approved: "Fix anything marked with a cross in the checklist, then create the campaign on Meta. It is created paused, so nothing spends yet.",
-  launched: "The campaign is on Meta, paused. Switch it on in Ads Manager when you are ready; the Campaigns page then tracks it.",
+  launched: "The campaign is on Meta, paused. Press Start below when you are ready; the Campaigns page then tracks it.",
   running: "The campaign is running. The Campaigns page checks it every few hours and emails you about problems.",
 };
 
+// The plan page: a new plan shows only the Auto plan card (the form opens on request);
+// an open plan shows its estimate and the plan, without the input form.
+let MANUAL = false, DETAILS = false;
+function showPlanTop() {
+  const top = $("#plan-top");
+  top.classList.toggle("no-form", !!currentPlan);
+  top.hidden = currentPlan ? !DETAILS : !MANUAL;
+  $("#btn-manual").textContent = MANUAL ? "Hide the form" : "Fill it in yourself instead";
+}
+$("#btn-manual").addEventListener("click", () => { MANUAL = !MANUAL; showPlanTop(); });
+
+function renderAutoWhy(plan) {
+  const box = $("#auto-why"), a = plan.auto;
+  box.hidden = !a;
+  $("#auto-card").hidden = true;
+  if (!a) return;
+  const list = (rows) => `<ul>${rows.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
+  box.innerHTML = `<div class="panel-title">Why this plan</div>
+    ${(a.based_on || []).length ? `<div class="why-sub">Based on</div>${list(a.based_on)}` : ""}
+    <div class="why-sub">What the app chose</div>
+    <ul class="why">${(a.decisions || []).map((d) =>
+      `<li><b>${esc(d.topic)}:</b> ${esc(d.choice)}<span class="sub">${esc(d.why)}</span></li>`).join("")}</ul>
+    ${(a.ideas || []).length ? `<div class="why-sub">Other ideas from the manager <span class="sub">advice only, not part of this campaign</span></div>${list(a.ideas)}` : ""}`;
+}
+
 function renderPlan(plan) {
+  if (currentPlan?.id !== plan.id) DETAILS = false;
   currentPlan = plan;
+  renderAutoWhy(plan);
+  showPlanTop();
+  $("#pick-field").hidden = true;
   const c = latest(plan);
   setPlanTitle(plan);
   $("#btn-new-plan").hidden = false;
@@ -507,7 +574,9 @@ function renderPlan(plan) {
   const li = (arr) => `<ul>${(arr || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
   const t = c.monitoring_targets || {};
   const totalDays = c.phases.reduce((n, p) => n + (+p.days || 0), 0) || 1;
-  $("#plan-view").innerHTML = `
+  $("#plan-view").innerHTML = `${glanceHtml(plan, c)}
+    <button type="button" class="link-btn" id="btn-details">${DETAILS ? "Hide the full plan" : "Show the full plan"}</button>
+    <div id="plan-details" ${DETAILS ? "" : "hidden"}>
     <div class="plan-section">
       <p class="summary">${esc(c.summary)}</p>
       <p class="objective">Objective: ${esc(c.objective)}</p>
@@ -549,9 +618,11 @@ function renderPlan(plan) {
         <div><h4>Scale when</h4>${li(c.scale_rules)}</div>
         <div><h4>Risks</h4>${li(c.risks)}</div>
       </div>
+    </div>
     </div>`;
 
-  loadCreatives(plan).catch((e) => toast(e.message, true));
+  if (plan.auto && plan.auto.scope === "catalogue") $("#creatives-panel").hidden = true;  // pictures come from the catalogue
+  else loadCreatives(plan).catch((e) => toast(e.message, true));
 
   $("#version-list").innerHTML = plan.versions.map((v) =>
     `<li>v${v.version} · ${v.source === "ai" ? "generated" : "edited"} · ${utc(v.created_at).toLocaleString()}${v.note ? ` · ${esc(v.note)}` : ""}</li>`
@@ -703,10 +774,17 @@ $("#btn-approve").addEventListener("click", async () => {
   if (btn.disabled) return;
   btn.disabled = true;
   try {
-    renderPlan(await api(`/api/plans/${currentPlan.id}/approve`, { method: "POST" }));
-    toast("Approved. Next: check the list and create the campaign on Meta.");
+    const plan = await api(`/api/plans/${currentPlan.id}/approve`, { method: "POST" });
+    renderPlan(plan);
+    if (!ME?.is_superuser) { toast("Approved. The owner creates it on Meta."); return; }
+    const r = await api(`/api/plans/${plan.id}/readiness`).catch(() => ({ ready: false }));
+    if (!r.ready) { toast("Approved. Fix the items marked with a cross, then create it on Meta."); return; }
+    btn.innerHTML = `<span class="spin"></span>Creating on Meta`;
+    const out = await api(`/api/plans/${plan.id}/launch`, { method: "POST" });
+    if (currentPlan?.id === plan.id) renderPlan(out);
+    toast("Approved and created on Meta, paused. Press Start when you are ready.");
   } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; }
+  finally { btn.disabled = false; btn.textContent = "Approve"; }
 });
 // ---------- creatives (AI images) ----------
 
@@ -837,8 +915,22 @@ function renderLaunch(plan) {
       ${l.ads_manager_url ? `<a class="btn small ghost" href="${esc(l.ads_manager_url)}" target="_blank" rel="noopener">Open in Ads Manager ${icon("external")}</a>` : ""}</div>
     <div>Campaign <code>${esc(l.campaign_id)}</code> · ${adsets.length} ad sets · ${ads.length} ads</div>
     ${adsets.length ? `<div class="muted">Daily budgets: ${adsets.map((a) => `${esc(a.name)} ${esc(a.daily_budget ?? "")} ${esc(a.currency || "")}`).join(" · ")}</div>` : ""}
-    ${notes.length ? `<ul>${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
+    ${notes.length ? `<ul>${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+    ${l.started_at ? `<div class="sub">Started ${utc(l.started_at).toLocaleString()}</div>`
+      : live ? "" : `<button class="btn primary owner-only" data-start="${l.id}">Start campaign</button>`}`;
 }
+
+$("#launch-info").addEventListener("click", async (ev) => {
+  const b = ev.target.closest("[data-start]");
+  if (!b) return;
+  if (!(await ask("Start the campaign?", "Its ads, ad sets and the campaign are switched on, and money starts to be spent once Meta has reviewed the ads.", "Start"))) return;
+  b.disabled = true; b.innerHTML = `<span class="spin"></span>Starting`;
+  try {
+    const out = await api(`/api/launches/${b.dataset.start}/start`, { method: "POST" });
+    if (currentPlan?.id === out.id) renderPlan(out);
+    toast("Started. Meta reviews the ads first; the Campaigns page tracks it from now on.");
+  } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Start campaign"; }
+});
 
 $("#btn-launch").addEventListener("click", async () => {
   if (!(await ask("Create the campaign on Meta?", "The campaign, its ad sets and ads are created PAUSED. Nothing spends until you switch it on in Ads Manager.", "Create, paused"))) return;
@@ -1412,6 +1504,7 @@ document.addEventListener("click", async (ev) => {
 
 $("#btn-copy-plan").addEventListener("click", () => {
   const inputs = { ...currentPlan.inputs };
+  MANUAL = true;  // copying means changing inputs: the form opens
   newPlan();
   fillForm(inputs);
   updateConversions();
@@ -1552,6 +1645,10 @@ async function loadBrandOptions() {
   ss.value = BRANDS.some((b) => String(b.id) === keepStats) ? keepStats : "0";
   ss.hidden = BRANDS.length < 2;
   if (keepStats && ss.value !== keepStats) loadStats().catch(() => {});  // the shown store was deleted
+  const as = $("#auto-store"), keepAuto = as.value;
+  as.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
+  as.value = BRANDS.some((b) => String(b.id) === keepAuto) ? keepAuto : "0";
+  $("#auto-store-field").hidden = BRANDS.length < 2;
   const ps = $("#prod-store"), keepProd = ps.value;
   ps.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
   ps.value = BRANDS.some((b) => String(b.id) === keepProd) ? keepProd : "0";
@@ -1571,7 +1668,8 @@ function openBrandForm(b) {
   const f = $("#brand-form");
   f.reset();
   f.elements.id.value = b ? b.id : "";
-  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls"])
+  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls",
+                   "shop_domain", "shop_token", "woo_key", "woo_secret", "site_api_key"])
     f.elements[k].value = b ? (b[k] || "") : "";
   $("#brand-form-title").textContent = b ? `Edit ${b.name}` : "New store";
   $("#btn-brand-delete").hidden = !b;
@@ -1591,7 +1689,8 @@ $("#brand-list").addEventListener("click", async (ev) => {
 function brandValues() {
   const f = $("#brand-form");
   const v = {};
-  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls"])
+  for (const k of ["name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id", "store_url", "creative_image_urls",
+                   "shop_domain", "shop_token", "woo_key", "woo_secret", "site_api_key"])
     v[k] = f.elements[k].value.trim();
   return v;
 }
@@ -1638,7 +1737,7 @@ $("#btn-brand-delete").addEventListener("click", async () => {
 
 // ---------- sales brief: prefill with this store's last answers ----------
 
-const BRIEF_KEYS = ["offer", "usp", "delivery_days", "returns", "social_proof"];
+const BRIEF_KEYS = ["offer", "usp", "delivery_days", "returns", "social_proof", "extra"];
 let briefSeq = 0;
 async function prefillBrief() {
   const f = $("#plan-form");
@@ -1657,6 +1756,8 @@ $("#plan-form").elements.brand_id.addEventListener("change", () => {
   for (const k of BRIEF_KEYS) f.elements[k].value = "";  // another store, other facts
   f.elements.cod.checked = false;
   prefillBrief();
+  loadProductPick().catch(() => {});
+  applyStoreCategory().catch(() => {});
 });
 
 
@@ -1692,7 +1793,7 @@ function renderPolicy(plan) {
 
 // ---------- products: which one to advertise next ----------
 
-const VERDICT_TAG = { "Proven seller": "approved", "One sale so far": "on_track", "Not tested yet": "neutral",
+const VERDICT_TAG = { "Proven seller": "approved", "One sale so far": "on_track", "Not tested yet": "neutral", "Barely tested": "neutral", "Best seller in your store": "approved",
   "Clicks, no sales": "warning", "Sells, but ads cost too much": "warning", "Spent without results": "low",
   "Loses money": "behind", "Out of stock": "behind" };
 let PRODUCTS = [];
@@ -1713,6 +1814,7 @@ function renderProducts() {
   const metaLine = (m) => m && (m.spend_usd || m.clicks || m.purchases)
     ? `${fmt.usd(m.spend_usd || 0)} ads · ${fmt.int(m.clicks || 0)} clicks · <b>${fmt.int(m.purchases || 0)} sales</b>`
     : `<span class="sub">no ad results yet</span>`;
+  const soldLine = (m) => m && m.store_units ? ` · <b>${fmt.int(m.store_units)} sold</b> in your store` : "";
   box.innerHTML = `
     <div class="prod-best">${icon("check")}<span><b>Best next: ${esc(top.title)}</b> · ${esc(top.reason)}</span></div>
     ${PRODUCTS.map((p, i) => `
@@ -1721,8 +1823,8 @@ function renderProducts() {
       <div class="prod-main">
         <div class="prod-title"><span class="mono sub">${i + 1}</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a></div>
         <div class="sub">${site(p)}${p.kind ? ` · ${esc(p.kind)}` : ""}</div>
-        <div class="sub">${metaLine(p.meta)}</div>
-        <div class="prod-why"><span class="tag ${VERDICT_TAG[p.verdict] || "neutral"}">${esc(p.verdict)}</span> <span>${esc(p.reason)}</span></div>
+        <div class="sub">${metaLine(p.meta)}${soldLine(p.meta)}</div>
+        <div class="prod-why"><span class="tag ${VERDICT_TAG[p.verdict.replace(/ \(#\d+\)$/, "")] || "neutral"}">${esc(p.verdict)}</span> <span>${esc(p.reason)}</span></div>
       </div>
       <div class="prod-costs">
         <label><span>Price</span><div class="affix"><em>USD</em><input type="number" min="0" step="0.5" data-f="price_usd" value="${p.price_usd || ""}" /></div></label>
@@ -1765,6 +1867,9 @@ $("#prod-list").addEventListener("click", (ev) => {
   f.elements.unit_cost_usd.value = p.cost_usd || "";
   f.elements.shipping_usd.value = p.shipping_usd || "";
   f.elements.landing_url.value = p.url || "";
+  applyCategory(p);
+  MANUAL = true;
+  showPlanTop();
   go("plan");
   window.scrollTo({ top: 0 });
   updateConversions();
@@ -1781,9 +1886,164 @@ $("#btn-prod-sync").addEventListener("click", async () => {
   try {
     const bid = +($("#prod-store").value || 0);
     const r = await api(`/api/brands/${bid}/products/sync`, { method: "POST" });
-    $("#prod-info").textContent = `${r.products} products read from the ${r.platform === "shopify" ? "Shopify" : "WooCommerce"} site; `
-      + `${r.with_meta_results} have Meta ad results.${r.note ? " " + r.note : ""}`;
+    $("#prod-info").textContent = `${r.products} products read from ${({ shopify: "Shopify", woocommerce: "WooCommerce", site: "your site's API" })[r.platform] || "the store"}; `
+      + `${r.with_sales} sold in the ${r.sales_window}; ${r.with_meta_results} have Meta ad results; ${r.categories} store categories.`
+      + `${r.note ? " " + r.note : ""}`;
     await loadProducts();
   } catch (e) { $("#prod-info").textContent = e.message; toast(e.message, true); }
   finally { btn.disabled = false; }
+});
+
+
+// ---------- New plan: pick the product from the store's own list ----------
+
+// The category the app guessed for the product (from its name and the store); the user can still change it.
+function applyCategory(p) {
+  const f = $("#plan-form");
+  if (!p.niche || ![...f.elements.niche.options].some((o) => o.value === p.niche)) return;
+  const note = p.site_category || p.category_note || "";
+  selectCategory(p.niche, note);
+  f.elements.category_note.value = note;
+  f.elements.niche.dataset.touched = "1";
+  updateNoteField();
+}
+
+// A blank New plan starts with what the store sells (its products, its name and web address, or its last plan).
+let storeCatSeq = 0;
+async function applyStoreCategory() {
+  const f = $("#plan-form");
+  if (currentPlan) return;
+  const seq = ++storeCatSeq, bid = +f.elements.brand_id.value || 0;
+  const c = await api(`/api/brands/${bid}/category`);
+  if (seq !== storeCatSeq || currentPlan) return;
+  renderNicheOptions(c.site_categories || []);
+  if (f.elements.niche.dataset.touched) return;
+  if (!c.niche || ![...f.elements.niche.options].some((o) => o.value === c.niche)) return;
+  selectCategory(c.niche, c.category_note || "");
+  f.elements.category_note.value = c.category_note || "";
+  onCategoryChange();  // also the category's usual price, unless a price was typed
+  clearTimeout(estTimer); estTimer = setTimeout(liveEstimate, 150);
+}
+
+let PICK = [], pickSeq = 0;
+async function loadProductPick() {
+  const field = $("#pick-field"), sel = $("#product-pick"), f = $("#plan-form");
+  if (currentPlan) { field.hidden = true; return; }
+  const bid = +f.elements.brand_id.value || 0, seq = ++pickSeq;
+  const rows = await api(`/api/products?brand_id=${bid}`);
+  if (seq !== pickSeq || currentPlan) return;  // another store was picked, or a plan opened, meanwhile
+  PICK = rows.filter((r) => r.in_stock);
+  if (!PICK.length) { field.hidden = true; return; }
+  sel.innerHTML = `<option value="">Choose a product (best first)</option>`
+    + PICK.map((r, i) => `<option value="${esc(r.key)}">${i + 1}. ${esc(r.title)} · ${esc(r.verdict)}</option>`).join("")
+    + `<option value="__own">Type my own product instead</option>`;
+  const typed = f.elements.product.value.trim();
+  const same = PICK.find((r) => r.title === typed);  // e.g. arrived from Products > Make plan
+  sel.value = same ? same.key : (typed ? "__own" : "");
+  field.hidden = false;
+}
+
+$("#product-pick").addEventListener("change", () => {
+  const f = $("#plan-form"), v = $("#product-pick").value;
+  if (v === "__own") {
+    f.elements.product.value = ""; f.elements.landing_url.value = "";
+    f.elements.product.focus();
+    return;
+  }
+  const p = PICK.find((r) => r.key === v);
+  if (!p) return;
+  f.elements.product.value = p.title;
+  f.elements.landing_url.value = p.url || "";
+  applyCategory(p);
+  if (p.price_usd) { f.elements.price_usd.value = p.price_usd; f.elements.price_usd.dataset.touched = "1"; }
+  f.elements.unit_cost_usd.value = p.cost_usd || "";
+  f.elements.shipping_usd.value = p.shipping_usd || "";
+  updateConversions();
+  clearTimeout(estTimer); estTimer = setTimeout(liveEstimate, 150);
+  if (!p.price_usd) toast("Enter this product's price in USD (Products page saves it for next time).");
+});
+
+
+// ---------- Make it sell: fill it from the store's own ads and the product page ----------
+
+$("#btn-brief-fill").addEventListener("click", async () => {
+  const f = $("#plan-form"), btn = $("#btn-brief-fill"), info = $("#brief-fill-info");
+  btn.disabled = true;
+  info.textContent = "Reading your ads and the product page (up to a minute)";
+  try {
+    const r = await api("/api/brief/suggest", { method: "POST",
+      body: { brand_id: +f.elements.brand_id.value || 0, landing_url: (f.elements.landing_url.value || "").trim() } });
+    let filled = 0;
+    for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) {
+      if (!r[k] || String(f.elements[k].value || "").trim()) continue;  // never overwrite what you typed
+      f.elements[k].value = r[k];
+      filled++;
+    }
+    info.textContent = `${filled ? `${filled} field${filled > 1 ? "s" : ""} filled` : "Nothing new to fill"} from `
+      + `${r.read.ads} ad${r.read.ads === 1 ? "" : "s"}${r.read.page ? " and the product page" : ""}. Check them before creating the plan: an offer from an old ad (a past sale) may have ended, and the ads will promise whatever is here.`
+      + (r.notes.length ? " " + r.notes.join(" ") : "");
+    const box = $("#brief-ads-do");
+    box.textContent = r.what_your_ads_do ? `What your ads do: ${r.what_your_ads_do}` : "";
+    box.hidden = !r.what_your_ads_do;
+  } catch (e) { info.textContent = e.message; toast(e.message, true); }
+  finally { btn.disabled = false; }
+});
+
+
+// ---------- Auto plan: budget and days in, the whole plan out ----------
+
+$("#btn-auto-plan").addEventListener("click", async () => {
+  const btn = $("#btn-auto-plan"), info = $("#auto-info");
+  const budget = +$("#auto-budget").value, days = +$("#auto-days").value;
+  if (!(budget >= 1000)) { info.textContent = "Enter a budget of at least PKR 1,000."; return; }
+  if (!(days >= 3 && days <= 90)) { info.textContent = "Run it for 3 to 90 days."; return; }
+  btn.disabled = true; btn.innerHTML = `<span class="spin"></span>Working it out`;
+  info.textContent = "Reading your results, catalogue and ads, choosing what and where, and writing the plan (about a minute)";
+  try {
+    const p = await api("/api/plans/auto", { method: "POST",
+      body: { brand_id: +($("#auto-store").value || 0), budget_pkr: budget, duration_days: days,
+              ...(+$("#auto-limit").value > 0 ? { max_cost_per_order_pkr: +$("#auto-limit").value } : {}) } });
+    info.textContent = "";
+    await openPlan(p.id);
+    window.scrollTo({ top: 0 });
+    toast("Plan ready. Read why the app chose this, edit anything, then approve.");
+  } catch (e) { info.textContent = e.message; toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "Make the best plan"; }
+});
+
+
+// ---------- the plan in short ----------
+
+function glanceHtml(plan, c) {
+  const e = plan.estimate || {}, a = e.assumptions || {}, auto = plan.auto, inp = plan.inputs || {};
+  const t = c.monitoring_targets || {};
+  const limit = auto && auto.max_cpa_pkr;
+  const what = auto && auto.scope === "catalogue" ? `Your catalogue: ${auto.product_set_name || inp.product}` : inp.product;
+  const hooks = (c.creatives || []).map((cr) => cr.hook).filter(Boolean).slice(0, 4);
+  const profit = e.profit_usd !== null && e.profit_usd !== undefined
+    ? `<li><span>Profit after ads</span><b>${e.profit_usd >= 0 ? "about " : ""}${fmt.usd(e.profit_usd)}</b></li>` : "";
+  return `<div class="glance">
+    <div class="panel-title">Plan in short</div>
+    <ul class="glance-list">
+      <li><span>What</span><b>${esc(what)}</b></li>
+      <li><span>Where</span><b>${esc(a.country || inp.country)}</b></li>
+      <li><span>Budget</span><b>${fmt.pkr(inp.budget_pkr)} for ${esc(inp.duration_days)} days</b><em>about ${fmt.usd(e.daily_usd)} a day</em></li>
+      <li><span>Orders expected</span><b>${esc(e.orders_low)} to ${esc(e.orders_high)}, most likely ${esc(e.orders_expected)}</b><em>about ${fmt.pkr(e.cpa_pkr)} of ads per order; one order sells for ${fmt.usd(inp.price_usd)}</em></li>
+      ${limit ? `<li><span>Your limit per order</span><b>${fmt.pkr(limit)} of ads at most</b><em>${e.cpa_pkr > limit
+        ? "The estimate is above your limit: Meta may spend less and bring fewer orders" : "The estimate is within your limit"}</em></li>` : ""}
+      ${profit}
+      <li><span>Who sees it</span><b>${(c.ad_sets || []).map((x) => `${esc(x.name)} (${esc(x.daily_budget_pct)}%)`).join(", ")}</b></li>
+      <li><span>The ads say</span><b>${hooks.map((h) => `“${esc(h)}”`).join("<br>")}</b></li>
+      <li><span>Safety</span><b>${limit ? "Meta is told to keep to your limit. " : ""}The app alerts you when one order costs more than ${
+        limit ? fmt.pkr(limit) : fmt.usd(t.max_cpa_usd)}</b><em>it stops such ads itself only if Automation is on</em></li>
+    </ul>
+  </div>`;
+}
+
+$("#plan-view").addEventListener("click", (ev) => {
+  if (ev.target.id !== "btn-details") return;
+  DETAILS = !DETAILS;
+  $("#plan-details").hidden = !DETAILS;
+  ev.target.textContent = DETAILS ? "Hide the full plan" : "Show the full plan";
+  showPlanTop();
 });

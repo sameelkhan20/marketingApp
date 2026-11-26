@@ -20,14 +20,21 @@ META_KEYS = [
     "last_digest_at",      # ISO date of the last weekly digest email
     "aud_pixel", "aud_visitors", "aud_buyers", "aud_account",  # retargeting audiences, reused per pixel + account
     "winners",             # JSON: the main store's best past ads (backend/meta_sync.py), fed to the planner
+    # the store's own API (backend/store_api.py), read-only keys
+    "shop_domain",         # Shopify: my-store.myshopify.com
+    "shop_token",          # Shopify Admin API access token (encrypted)
+    "woo_key",             # WooCommerce REST API consumer key (encrypted)
+    "woo_secret",          # WooCommerce REST API consumer secret (encrypted)
+    "site_api_key",        # the store's own site API key, https://<store>/api/v1 (encrypted; the app only reads)
 ]
 
-SECRET_KEYS = {"meta_access_token"}
+SECRET_KEYS = {"meta_access_token", "shop_token", "woo_key", "woo_secret", "site_api_key"}
 
 # Keys the Meta-tab form may write. Internal keys (product_photo, auto_actions, last_digest_at...)
 # have their own endpoints with validation.
 FORM_KEYS = {"meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id",
-             "meta_ig_account_id", "store_url", "creative_image_urls"}
+             "meta_ig_account_id", "store_url", "creative_image_urls",
+             "shop_domain", "shop_token", "woo_key", "woo_secret", "site_api_key"}
 
 
 def _migrate_plain_secrets(session: Session) -> None:

@@ -226,6 +226,26 @@ class MetaClient:
             limit=500,
         )
 
+    # ---------- catalogue ----------
+
+    def adsets_promoting(self, act: str) -> list[dict]:
+        """Every ad set with what it promotes (a catalogue ad set carries promoted_object.product_set_id)."""
+        return self.get_all(f"{act}/adsets", fields="id,name,promoted_object,campaign{id,name}", limit=200)
+
+    def ads_product_sets(self, act: str) -> list[dict]:
+        """Every ad with the product set of its creative (catalogue ads made in Ads Manager often keep the
+        product set on the ad, not on the ad set)."""
+        return self.get_all(f"{act}/ads", fields="adset_id,creative{product_set_id}", limit=500)
+
+    def adset_insights(self, act: str, since: str, until: str) -> list[dict]:
+        """One row per ad set over the whole period: what it spent and sold."""
+        return self.get_all(f"{act}/insights", level="adset", time_range={"since": since, "until": until},
+                            fields="adset_id,spend,impressions,inline_link_clicks,actions,action_values", limit=500)
+
+    def product_set(self, product_set_id: str) -> dict:
+        """Name, size and catalogue of a product set (needs the catalog_management permission)."""
+        return self.get(product_set_id, fields="id,name,product_count,product_catalog{id,name}")
+
     def product_insights(self, act: str, since: str, until: str) -> list[dict]:
         """One row per catalogue product over the whole period ("<retailer id>, <name>" in product_id)."""
         return self.get_all(
@@ -333,11 +353,13 @@ class MetaClient:
 
     # ---------- creation (always PAUSED) ----------
 
-    def create_campaign(self, act: str, name: str, is_adset_budget_sharing_enabled: bool = False) -> str:
+    def create_campaign(self, act: str, name: str, is_adset_budget_sharing_enabled: bool = False,
+                        catalog_id: str = "") -> str:
         # Budgets live on ad sets (no CBO); Meta requires this flag to be explicit in that case.
+        extra = {"promoted_object": {"product_catalog_id": catalog_id}} if catalog_id else {}
         return self.post(f"{act}/campaigns", name=name, objective="OUTCOME_SALES", status="PAUSED",
                          special_ad_categories=[],
-                         is_adset_budget_sharing_enabled=str(is_adset_budget_sharing_enabled).lower())["id"]
+                         is_adset_budget_sharing_enabled=str(is_adset_budget_sharing_enabled).lower(), **extra)["id"]
 
     def create_adset(self, act: str, **fields: Any) -> str:
         return self.post(f"{act}/adsets", status="PAUSED", **fields)["id"]

@@ -8,7 +8,7 @@
   <link rel="apple-touch-icon" href="/static/icon.svg?v=1" />
   <meta name="theme-color" content="#f0f2f5" />
   <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=19" />
+  <link rel="stylesheet" href="/static/styles.css?v=25" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -116,7 +116,20 @@
 
         <!-- ================= NEW PLAN ================= -->
         <section id="view-plan" class="view" hidden>
-          <div class="plan-top">
+          <div class="card auto-card" id="auto-card">
+            <div class="card-title">Auto plan <span class="optional">give the budget and the days, the app does the rest</span></div>
+            <p class="hint" style="margin:0 0 10px">The app picks what to advertise (your catalogue or one product), the country, the audiences, the offer and the ads from your own results, and tells you why. You check it, edit anything, and approve: it is then created on Meta, ready for you to press Start.</p>
+            <div class="auto-row">
+              <label class="field" id="auto-store-field" hidden><span>Store</span><select id="auto-store"></select></label>
+              <label class="field"><span>Total budget</span><div class="affix"><em>PKR</em><input id="auto-budget" type="number" min="1000" step="500" value="100000" /></div></label>
+              <label class="field"><span>Run for</span><div class="affix suffix"><input id="auto-days" type="number" min="3" max="90" value="14" /><em>days</em></div></label>
+              <label class="field"><span>Max ad cost per order <em class="opt">optional</em></span><div class="affix"><em>PKR</em><input id="auto-limit" type="number" min="1" step="100" placeholder="e.g. 3000" /></div></label>
+              <button type="button" class="btn primary" id="btn-auto-plan">Make the best plan</button>
+            </div>
+            <p class="hint" id="auto-info" style="margin:6px 0 0"></p>
+            <button type="button" class="link-btn" id="btn-manual">Fill it in yourself instead</button>
+          </div>
+          <div class="plan-top" id="plan-top" hidden>
             <form id="plan-form" class="card">
               <div class="card-title">Campaign inputs</div>
               <label class="field"><span>Total budget</span>
@@ -125,6 +138,9 @@
               </label>
               <label class="field" id="brand-field" hidden><span>Store</span><select name="brand_id" id="brand-select"></select></label>
               <label class="field"><span>Target country</span><select name="country" id="country"></select></label>
+              <label class="field" id="pick-field" hidden><span>Product from your store <em class="opt">best first</em></span>
+                <select id="product-pick"></select>
+              </label>
               <label class="field"><span>Product</span>
                 <input name="product" type="text" placeholder="e.g. Black biker leather jacket, 24-piece cutlery set" maxlength="200" required />
               </label>
@@ -156,6 +172,14 @@
                   <label class="field"><span>Returns</span><input name="returns" type="text" maxlength="150" placeholder="e.g. 30-day easy returns" /></label>
                 </div>
                 <label class="field"><span>Reviews / social proof</span><input name="social_proof" type="text" maxlength="200" placeholder="e.g. 4.8 stars from 1,200 buyers" /></label>
+                <label class="field"><span>Anything else <em class="opt">optional</em></span>
+                  <textarea name="extra" rows="2" maxlength="600" placeholder="Anything the plan should know: a new colour, a launch date, what buyers ask, what to avoid saying..."></textarea>
+                </label>
+                <div class="toolbar brief-fill">
+                  <button type="button" class="btn small" id="btn-brief-fill"><svg class="icon"><use href="#i-refresh"/></svg>Fill from my ads &amp; site</button>
+                  <span class="hint" id="brief-fill-info">Reads your own Meta ads and the product page; only what they say</span>
+                </div>
+                <p class="hint" id="brief-ads-do" hidden></p>
                 <label class="check-line" id="cod-line" hidden><input name="cod" type="checkbox" /> <span>Cash on delivery available <small class="hint">Pakistan plans: the ads say it</small></span></label>
               </details>
               <div class="field-group">
@@ -223,6 +247,7 @@
                 <button id="btn-launch" class="owner-only btn primary" hidden>Create on Meta, paused</button>
               </div>
             </div>
+            <div id="auto-why" class="panel why-panel" hidden></div>
             <div id="policy" class="panel policy" hidden></div>
             <div id="launch-info" class="panel" hidden></div>
             <div id="readiness" class="panel" hidden></div>
@@ -274,7 +299,7 @@
             <div class="card-head">
               <div>
                 <div class="card-title">Which product to advertise next</div>
-                <p class="hint" id="prod-info">Reads the products from your store's site and what each one did in your Meta ads. Enter price and costs, and the best product rises to the top</p>
+                <p class="hint" id="prod-info">Reads your products, stock, categories and real sales through the store keys (Connections), and what each one did in your Meta ads. Enter costs, and the best product rises to the top</p>
               </div>
               <div class="toolbar">
                 <select id="prod-store" aria-label="Store" hidden></select>
@@ -487,6 +512,24 @@
               <label class="field"><span>Store URL, the landing page for ads</span>
                 <input name="store_url" type="url" placeholder="https://yourstore.com/jackets" />
               </label>
+              <details class="field-group store-keys">
+                <summary class="group-title">Store keys <span class="optional">for the Products page</span></summary>
+                <p class="hint" style="margin:0 0 8px">Keys so the app can read the products, stock, categories and real sales. Fill <b>one</b> kind: your own site's API key, Shopify, or WooCommerce. Stored encrypted; the app only reads and never changes anything on the store.</p>
+                <label class="field"><span>Your site's API key</span><input name="site_api_key" type="password" autocomplete="off" placeholder="for sites with their own /api/v1 (like myapron.co.uk)" />
+                  <small class="where">Your site's admin → API keys. Give it access to Products, Collections and Orders only; the store URL above must be the https:// site</small></label>
+                <div class="field-row">
+                  <label class="field"><span>Shopify address</span><input name="shop_domain" type="text" autocomplete="off" placeholder="my-store.myshopify.com" />
+                    <small class="where">Shopify admin → Settings → Domains: the .myshopify.com one</small></label>
+                  <label class="field"><span>Shopify Admin API token</span><input name="shop_token" type="password" autocomplete="off" placeholder="shpat_…" />
+                    <small class="where">Settings → Apps → Develop apps → Create an app → Admin API scopes: read_products, read_orders → Install → Reveal token</small></label>
+                </div>
+                <div class="field-row">
+                  <label class="field"><span>WooCommerce consumer key</span><input name="woo_key" type="password" autocomplete="off" placeholder="ck_…" />
+                    <small class="where">WordPress → WooCommerce → Settings → Advanced → REST API → Add key, permission: Read</small></label>
+                  <label class="field"><span>WooCommerce consumer secret</span><input name="woo_secret" type="password" autocomplete="off" placeholder="cs_…" />
+                    <small class="where">Shown once with the key. The store URL above must be the https:// site</small></label>
+                </div>
+              </details>
               <label class="field"><span>Fallback image URLs, comma separated</span>
                 <textarea name="creative_image_urls" rows="2" placeholder="https://…/jacket1.jpg, https://…/jacket2.jpg"></textarea>
               </label>
@@ -568,6 +611,24 @@
                 <label class="field"><span>Pixel or dataset id</span><input name="meta_pixel_id" type="text" /></label>
                 <label class="field"><span>Store URL</span><input name="store_url" type="url" placeholder="https://yourstore.com" /></label>
               </div>
+              <details class="field-group store-keys">
+                <summary class="group-title">Store keys <span class="optional">for the Products page</span></summary>
+                <p class="hint" style="margin:0 0 8px">Keys so the app can read the products, stock, categories and real sales. Fill <b>one</b> kind: your own site's API key, Shopify, or WooCommerce. Stored encrypted; the app only reads and never changes anything on the store.</p>
+                <label class="field"><span>Your site's API key</span><input name="site_api_key" type="password" autocomplete="off" placeholder="for sites with their own /api/v1 (like myapron.co.uk)" />
+                  <small class="where">Your site's admin → API keys. Give it access to Products, Collections and Orders only; the store URL above must be the https:// site</small></label>
+                <div class="field-row">
+                  <label class="field"><span>Shopify address</span><input name="shop_domain" type="text" autocomplete="off" placeholder="my-store.myshopify.com" />
+                    <small class="where">Shopify admin → Settings → Domains: the .myshopify.com one</small></label>
+                  <label class="field"><span>Shopify Admin API token</span><input name="shop_token" type="password" autocomplete="off" placeholder="shpat_…" />
+                    <small class="where">Settings → Apps → Develop apps → Create an app → Admin API scopes: read_products, read_orders → Install → Reveal token</small></label>
+                </div>
+                <div class="field-row">
+                  <label class="field"><span>WooCommerce consumer key</span><input name="woo_key" type="password" autocomplete="off" placeholder="ck_…" />
+                    <small class="where">WordPress → WooCommerce → Settings → Advanced → REST API → Add key, permission: Read</small></label>
+                  <label class="field"><span>WooCommerce consumer secret</span><input name="woo_secret" type="password" autocomplete="off" placeholder="cs_…" />
+                    <small class="where">Shown once with the key. The store URL above must be the https:// site</small></label>
+                </div>
+              </details>
               <label class="field"><span>Fallback image URLs, comma separated</span><textarea name="creative_image_urls" rows="2"></textarea></label>
               <div class="brand-check muted" id="brand-check"></div>
               <div class="form-actions">
@@ -613,6 +674,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=25"></script>
+  <script src="/static/app.js?v=42"></script>
 </body>
 </html>

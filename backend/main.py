@@ -47,6 +47,7 @@ OWNER_ROUTES = {
     # anything that creates or changes spend on Meta, or throws results away
     ("POST", "/api/plans/{plan_id}/launch"), ("POST", "/api/alerts/{alert_id}/apply"),
     ("POST", "/api/actions/{log_id}/undo"), ("POST", "/api/launches/{launch_id}/complete"),
+    ("POST", "/api/launches/{launch_id}/start"),
     ("DELETE", "/api/plans/{plan_id}"),
     ("GET", "/api/backups"), ("POST", "/api/backups"), ("GET", "/api/backups/{name}"),
     ("GET", "/api/brands/{brand_id}"), ("POST", "/api/brands"), ("POST", "/api/brands/{brand_id}"),
@@ -149,6 +150,9 @@ ACTIVITY_ROUTES = [
     ("POST", r"/api/brands/(\d+)/winners", "settings", "winners_synced", "Best ads synced for store #{0}"),
     ("POST", r"/api/brands/(\d+)/sync", "settings", "store_synced", "History and best ads synced for store #{0}"),
     ("POST", r"/api/brands/(\d+)/products/sync", "settings", "products_synced", "Products read for store #{0}"),
+    ("POST", r"/api/brief/suggest", "plan", "brief_filled", "Sales brief filled from the store's ads"),
+    ("POST", r"/api/plans/auto", "plan", "auto_created", "Auto plan made from budget and days"),
+    ("POST", r"/api/launches/(\d+)/start", "launch", "started", "Campaign of launch #{0} switched on"),
     ("POST", r"/api/brands", "settings", "store_added", "Store added"),
     ("POST", r"/api/brands/(\d+)", "settings", "store_saved", "Store #{0} saved"),
     ("DELETE", r"/api/brands/(\d+)", "settings", "store_deleted", "Store #{0} deleted"),
@@ -266,6 +270,7 @@ class PlanRequest(BaseModel):
     social_proof: str = Field(default="", max_length=200)
     cod: bool = False                                          # cash on delivery offered
     landing_url: str = Field(default="", max_length=500)      # the product page the ads open (else the store URL)
+    extra: str = Field(default="", max_length=600)            # anything else the owner wants the plan to use
     unit_cost_usd: float = Field(ge=0, default=0)   # what one item costs you
     shipping_usd: float = Field(ge=0, default=0)    # shipping + packing per order
 
@@ -301,13 +306,14 @@ def _plan_out(p: Plan) -> dict:
         "created_at": p.created_at.isoformat(),
         "launches": launches,
         "policy": _policy(p),
+        "auto": {k: (p.brief or {}).get(k) for k in AUTO_KEYS} if (p.brief or {}).get("decisions") else None,
         "inputs": {
             "budget_pkr": p.budget_pkr, "country": p.country, "product": p.product,
             "niche": p.niche, "price_usd": p.price_usd, "duration_days": p.duration_days,
             "category_note": p.category_note or "",
             "brand_id": p.brand_id or 0,
             **{k: (p.brief or {}).get(k, 0 if k == "delivery_days" else "")
-               for k in ("offer", "usp", "delivery_days", "returns", "social_proof")},
+               for k in ("offer", "usp", "delivery_days", "returns", "social_proof", "extra")},
             "cod": bool((p.brief or {}).get("cod", False)),
             "landing_url": (p.brief or {}).get("landing_url", ""),
             "unit_cost_usd": (p.estimate or {}).get("assumptions", {}).get("unit_cost_usd", 0),
@@ -360,7 +366,19 @@ def estimate(req: PlanRequest):
 
 @app.post("/api/plans")
 def create_plan(req: PlanRequest):
+    return _create_plan(req)
+
+
+AUTO_KEYS = ("scope", "product_set_id", "product_set_name", "catalog_id", "decisions", "based_on", "ideas",
+             "max_cpa_pkr")
+
+
+def _create_plan(req: PlanRequest, extra: dict | None = None) -> dict:
+    """extra: what the auto plan decided (scope, product set, decisions), kept with the brief."""
+    extra = {k: v for k, v in (extra or {}).items() if k in AUTO_KEYS}
     e = _estimate(req)
+    limit_pkr = extra.get("max_cpa_pkr")
+    limit_usd = round(limit_pkr / e["assumptions"]["pkr_per_usd"], 2) if limit_pkr else 0
 
     from . import brands
     with get_session() as s:
@@ -372,9 +390,17 @@ def create_plan(req: PlanRequest):
         try:
             has_pixel = bool(brands.settings_for(s, req.brand_id)["meta_pixel_id"])
             from .meta_sync import winners_for
-            content = generate_plan({**req.model_dump(), "has_pixel": has_pixel}, e, rules, winners_for(s, req.brand_id))
+            content = generate_plan({**req.model_dump(), "has_pixel": has_pixel,
+                                     **{k: extra[k] for k in ("scope", "product_set_name") if k in extra},
+                                     **({"max_marketing_cost_per_order_usd": limit_usd} if limit_usd else {})},
+                                    e, rules, winners_for(s, req.brand_id))
         except Exception as ex:  # surfaces API/key problems to the UI
             raise HTTPException(502, f"Plan generation failed: {ex}")
+
+        if limit_usd:  # the owner's limit is the plan's cost target, whatever the writer proposed
+            content["monitoring_targets"] = {**content.get("monitoring_targets", {}), "max_cpa_usd": limit_usd}
+            content["kill_rules"] = [f"Stop an ad set that spends PKR {limit_pkr:,} without an order, or whose orders "
+                                     f"cost more than PKR {limit_pkr:,} each."] + list(content.get("kill_rules", []))
 
         # remember which rules shaped an AI plan, so approval and results credit only those
         e = {**e, "rules_used": [] if str(content.get("summary", "")).startswith("[TEMPLATE") else [r.id for r in rule_rows]}
@@ -382,14 +408,41 @@ def create_plan(req: PlanRequest):
             budget_pkr=req.budget_pkr, country=req.country.upper(), product=req.product,
             niche=req.niche, price_usd=req.price_usd, duration_days=req.duration_days, estimate=e,
             category_note=req.category_note.strip(), brand_id=req.brand_id,
-            brief={k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()
-                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod", "landing_url")},
+            brief={**{k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()
+                      if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod", "landing_url", "extra")},
+                   **extra},
         )
         p.versions.append(PlanVersion(version=1, source="ai", content=content))
         s.add(p)
         s.commit()
         s.refresh(p)
         return _plan_out(p)
+
+
+class AutoPlanRequest(BaseModel):
+    brand_id: int = Field(default=0, ge=0)
+    budget_pkr: float = Field(gt=0)
+    duration_days: int = Field(ge=3, le=90, default=14)
+    max_cost_per_order_pkr: float | None = Field(default=None, gt=0, le=10_000_000)   # optional: ad cost limit
+
+
+@app.post("/api/plans/auto")
+def auto_plan(req: AutoPlanRequest):
+    """Only the store, the budget and the days: the app decides what, where and how, and says why."""
+    from . import brands
+    from .autoplan import AutoPlanError, decide
+    with get_session() as s:
+        if not brands.exists(s, req.brand_id):
+            raise HTTPException(400, "That store does not exist")
+        try:
+            d = decide(s, req.brand_id, req.budget_pkr, req.duration_days, req.max_cost_per_order_pkr)
+        except AutoPlanError as ex:
+            raise HTTPException(400, str(ex))
+    try:
+        plan_req = PlanRequest(**d["inputs"])
+    except ValueError as ex:
+        raise HTTPException(400, f"The app could not fill the plan: {ex}")
+    return _create_plan(plan_req, d["extra"])
 
 
 @app.get("/api/plans")
@@ -643,6 +696,17 @@ def sync_store_products(brand_id: int):
             raise HTTPException(400, str(ex))
 
 
+@app.get("/api/brands/{brand_id}/category")
+def store_category(brand_id: int):
+    """The category a blank New plan starts with for this store."""
+    from . import products
+    with get_session() as s:
+        cat = products.store_category(s, brand_id)
+        own = products.site_categories(s, brand_id)
+    out = {"niche": cat[0], "category_note": cat[1]} if cat else {"niche": "", "category_note": ""}
+    return {**out, "site_categories": own}
+
+
 @app.get("/api/products")
 def list_products(brand_id: int = 0):
     from . import products
@@ -694,6 +758,32 @@ def check_brand(brand_id: int):
         return out
     except MetaError as ex:
         raise HTTPException(400, str(ex))
+
+
+class BriefSuggestRequest(BaseModel):
+    brand_id: int = Field(default=0, ge=0)
+    landing_url: str = Field(default="", max_length=500)
+
+
+@app.post("/api/brief/suggest")
+def suggest_brief(req: BriefSuggestRequest):
+    """Make it sell, filled from the store's own ads and the product page."""
+    from . import brands, llm, usage
+    from .brief_suggest import suggest
+    link = req.landing_url.strip()
+    if link and not re.match(r"^https?://[^\s/]+\.[^\s]+$", link):
+        raise HTTPException(400, "The ad link must be a web address")
+    with get_session() as s:
+        try:
+            return suggest(s, req.brand_id, link)
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
+        except usage.BudgetExceeded as ex:
+            raise HTTPException(400, str(ex))
+        except ValueError as ex:
+            raise HTTPException(400, str(ex))
+        except llm.LLMError as ex:
+            raise HTTPException(502, f"The AI could not read the ads: {ex}")
 
 
 @app.get("/api/brief")
@@ -906,7 +996,8 @@ def launch(plan_id: int):
             s.commit()
             raise HTTPException(400, str(ex))
         inputs = {"budget_pkr": p.budget_pkr, "country": p.country, "product": p.product,
-                  "niche": p.niche, "price_usd": p.price_usd, "duration_days": p.duration_days}
+                  "niche": p.niche, "price_usd": p.price_usd, "duration_days": p.duration_days,
+                  **{k: (p.brief or {}).get(k, "") for k in ("scope", "product_set_id", "catalog_id", "max_cpa_pkr")}}
         content = json.loads(json.dumps(p.versions[-1].content))  # exactly the approved version
         try:
             # Upload the plan's selected creatives to Meta first (once each), then launch with their hashes.
@@ -1108,6 +1199,35 @@ def _cal_name(s, key: str) -> str:
         store = next((b["name"] for b in brands.all_brands(s) if b["id"] == bid), f"store {bid}")
         name += f" · {get_category(parts[2])['label']} · {store}"
     return name
+
+
+@app.post("/api/launches/{launch_id}/start")
+def start_launch(launch_id: int):
+    """Switch on a campaign the app created paused: its ads, its ad sets, then the campaign. Spending starts
+    (after Meta's ad review)."""
+    from datetime import datetime as _dt
+    with get_session() as s:
+        l = s.get(Launch, launch_id)
+        if not l or l.status in ("completed", "deleted"):
+            raise HTTPException(400, "This campaign is closed or gone")
+        objs = dict(l.objects or {})
+        if objs.get("started_at"):
+            raise HTTPException(400, "Already started")
+        client = _client_for_launch(s, launch_id)
+        _check_account(client, l)
+        try:
+            for ad in objs.get("ads", []):
+                client.update_object(ad["id"], status="ACTIVE")
+            for a in objs.get("adsets", []):
+                client.update_object(a["id"], status="ACTIVE")
+            client.update_object(l.campaign_id, status="ACTIVE")
+        except MetaError as ex:
+            raise HTTPException(400, f"Meta did not start it: {ex}. Anything already switched on stays on; "
+                                     "check it in Ads Manager.")
+        objs["started_at"] = _dt.utcnow().isoformat()
+        l.objects = objs
+        s.commit()
+        return _plan_out(s.get(Plan, l.plan_id))
 
 
 @app.post("/api/launches/{launch_id}/complete")

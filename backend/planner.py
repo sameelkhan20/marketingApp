@@ -163,6 +163,13 @@ Budget reality: Meta needs about 50 purchases a week per ad set to optimise well
 estimate implies far fewer, use fewer ad sets (one broad prospecting ad set plus retargeting is
 often best) and put the variety into creatives instead.
 
+Catalogue plans: when INPUTS has "scope": "catalogue", every creative is a catalogue ad that shows
+products from the product set named in "product_set_name" (Meta picks the products for each person
+and takes the images from the catalogue). Set every creative's `format` to "Catalogue". Its
+primary_text and headline must fit every product in the set (no single product's name or price);
+the headline may use {{product.name}}. Make `visual_prompt` a one-line note of which products to
+lead with. Prospecting ad sets use broad audiences; Retargeting shows people the products they viewed.
+
 Formats: the store makes no videos. Every creative's `format` is exactly one of "Carousel"
 (2-10 square cards, the best for showing several angles or items), "Static image 1:1",
 "Static image 4:5" or "Static image 9:16". Include at least one Carousel. For a Carousel, the
@@ -180,7 +187,8 @@ say why in `risks`."""
 
 
 BRIEF_FIELDS = {"offer": "Offer", "usp": "Why buy from us", "delivery_days": "Delivery time (days)",
-                "returns": "Returns", "social_proof": "Reviews / social proof", "cod": "Cash on delivery"}
+                "returns": "Returns", "social_proof": "Reviews / social proof", "cod": "Cash on delivery",
+                "extra": "Anything else from the owner"}
 
 
 def _brief_text(inputs: dict) -> str:
@@ -274,7 +282,9 @@ def _facts(inputs: dict, estimate: dict) -> dict:
             "meta_min_daily_per_ad_set_usd": cmin,
             "max_ad_sets_the_budget_supports": max(1, int(float(estimate.get("daily_usd") or 0) // (cmin * 2))),
             "delivery_days": inputs.get("delivery_days") or None,
-            "cash_on_delivery": bool(inputs.get("cod"))}
+            "cash_on_delivery": bool(inputs.get("cod")),
+            **({"owner_max_marketing_cost_per_order_usd": inputs["max_marketing_cost_per_order_usd"]}
+               if inputs.get("max_marketing_cost_per_order_usd") else {})}
 
 
 def fit_to_budget(plan: dict, inputs: dict, estimate: dict) -> dict:
@@ -291,7 +301,13 @@ def fit_to_budget(plan: dict, inputs: dict, estimate: dict) -> dict:
 
 
 def generate_plan(inputs: dict, estimate: dict, rules: list[str], winners: list[dict] | None = None) -> dict:
-    return fit_to_budget(_generate_plan(inputs, estimate, rules, winners), inputs, estimate)
+    plan = fit_to_budget(_generate_plan(inputs, estimate, rules, winners), inputs, estimate)
+    if inputs.get("scope") == "catalogue":  # catalogue ads take their pictures from the catalogue
+        for c in plan.get("creatives", []):
+            c["format"] = "Catalogue"
+            if inputs.get("product") and inputs["product"] in str(c.get("headline", "")):
+                c["headline"] = "{{product.name}}"
+    return plan
 
 
 def _generate_plan(inputs: dict, estimate: dict, rules: list[str], winners: list[dict] | None = None) -> dict:

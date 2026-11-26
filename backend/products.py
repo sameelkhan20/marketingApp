@@ -1,8 +1,7 @@
-"""The store's products: read from the store's own site (Shopify or WooCommerce), joined with what each
-product did in Meta ads, and ranked so the owner can see which product to advertise next.
+"""The store's products: read through the store's own API (Shopify or WooCommerce keys, backend/store_api.py)
+with their stock, categories and real sales, joined with what each product did in Meta ads, and ranked so the
+owner can see which product to advertise next.
 
-Site: Shopify's public /products.json, or WooCommerce's public Store API. No keys are needed, but a bot
-challenge (Cloudflare "Just a moment...") blocks both; the owner has to allow the app through it.
 Meta: account insights broken down by product (catalogue ads). Each row's product_id is
 "<retailer id>, <product name>"; on Shopify the retailer id is the variant id.
 """
@@ -11,120 +10,17 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
-from urllib.parse import urlsplit
 
-import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import StoreProduct
 
-UA = {"User-Agent": "Mozilla/5.0 (compatible; AdsPlanner product reader)", "Accept": "application/json"}
-MAX_PAGES = 20          # 20 x 250 Shopify products, 20 x 100 WooCommerce products
-TIMEOUT = 20
+TOP_BEST = 5           # the store's 5 best sellers (by real orders) are called best sellers
 
 
 class ProductError(Exception):
     pass
-
-
-# ---------- reading the site ----------
-
-def _base(store_url: str) -> str:
-    u = urlsplit((store_url or "").strip())
-    if u.scheme not in ("http", "https") or not u.netloc:
-        raise ProductError("Set the store URL (like https://yourstore.com) first.")
-    return f"{u.scheme}://{u.netloc}"
-
-
-def _get_json(url: str):
-    try:
-        r = requests.get(url, headers=UA, timeout=TIMEOUT)
-    except requests.RequestException as ex:
-        raise ProductError(f"Could not reach the store ({type(ex).__name__}).")
-    ctype = r.headers.get("content-type", "")
-    if "json" not in ctype:
-        if r.status_code in (403, 429, 503) or "Just a moment" in r.text[:2000]:
-            raise ProductError("The store's bot protection (Cloudflare or similar) blocked the app. Allow the app "
-                               "through it, or turn the challenge off for the product list, then try again.")
-        return None  # not this platform
-    try:
-        return r.json()
-    except ValueError:
-        return None
-
-
-def _shopify(base: str) -> list[dict] | None:
-    out: list[dict] = []
-    for page in range(1, MAX_PAGES + 1):
-        data = _get_json(f"{base}/products.json?limit=250&page={page}")
-        if not isinstance(data, dict) or "products" not in data:
-            return None if page == 1 else out
-        items = data["products"]
-        if not items:
-            break
-        for p in items:
-            variants = p.get("variants") or []
-            prices = [float(v["price"]) for v in variants if v.get("price") not in (None, "")]
-            ids = [str(p.get("id", ""))] + [str(v.get("id", "")) for v in variants] + \
-                  [str(v.get("sku")) for v in variants if v.get("sku")]
-            out.append({
-                "key": f"shopify:{p.get('id')}",
-                "title": (p.get("title") or "")[:200],
-                "url": f"{base}/products/{p.get('handle', '')}",
-                "image": ((p.get("images") or [{}])[0].get("src") or "")[:500],
-                "site_price": min(prices) if prices else 0.0,
-                "currency": "",  # Shopify's public list has no currency; the owner enters the USD price
-                "in_stock": any(v.get("available", True) for v in variants) if variants else True,
-                "ids": [i for i in ids if i],
-                "kind": (p.get("product_type") or "")[:80],
-            })
-        if len(items) < 250:
-            break
-    return out
-
-
-def _woo(base: str) -> list[dict] | None:
-    out: list[dict] = []
-    for page in range(1, MAX_PAGES + 1):
-        data = _get_json(f"{base}/wp-json/wc/store/v1/products?per_page=100&page={page}")
-        if not isinstance(data, list):
-            return None if page == 1 else out
-        if not data:
-            break
-        for p in data:
-            pr = p.get("prices") or {}
-            minor = int(pr.get("currency_minor_unit", 2) or 0)
-            try:
-                price = int(pr.get("price") or 0) / (10 ** minor)
-            except (TypeError, ValueError):
-                price = 0.0
-            pid = str(p.get("id", ""))
-            ids = [pid, f"wc_post_id_{pid}"] + ([str(p["sku"]), f"{p['sku']}_{pid}"] if p.get("sku") else [])
-            out.append({
-                "key": f"woo:{pid}",
-                "title": re.sub(r"<[^>]+>", "", p.get("name") or "")[:200],
-                "url": (p.get("permalink") or "")[:500],
-                "image": ((p.get("images") or [{}])[0].get("src") or "")[:500],
-                "site_price": price,
-                "currency": (pr.get("currency_code") or "")[:3],
-                "in_stock": bool(p.get("is_in_stock", True)),
-                "ids": [i for i in ids if i],
-                "kind": ", ".join(c.get("name", "") for c in (p.get("categories") or []))[:80],
-            })
-        if len(data) < 100:
-            break
-    return out
-
-
-def read_site(store_url: str) -> tuple[str, list[dict]]:
-    """(platform, products) from the store's own site."""
-    base = _base(store_url)
-    for platform, reader in (("shopify", _shopify), ("woocommerce", _woo)):
-        items = reader(base)
-        if items is not None:
-            return platform, items
-    raise ProductError("This site does not look like a Shopify or WooCommerce store (no public product list).")
 
 
 # ---------- what each product did in Meta ads ----------
@@ -156,14 +52,32 @@ def meta_by_product(rows: list[dict], currency: str) -> dict[str, dict]:
     return out
 
 
+_COMMON = {"the", "a", "an", "and", "with", "for", "of", "in", "by", "my", "free"}
+
+
+def _closest(name: str, words: dict[str, set]) -> str | None:
+    """The site product whose name shares most words with the Meta name, when it clearly stands out
+    ("Full-Grain Leather BBQ Work Apron" vs "Full Grain Leather BBQ & Work Apron")."""
+    want = set(_norm(name).split()) - _COMMON
+    if not want:
+        return None
+    scored = sorted(((len(want & w) / len(want | w), k) for k, w in words.items() if w), reverse=True)
+    if not scored or scored[0][0] < 0.6:
+        return None
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.1:
+        return None  # two products fit about as well: do not guess
+    return scored[0][1]
+
+
 def match(products: list[dict], by_id: dict[str, dict]) -> tuple[dict[str, dict], int]:
     """{product key: summed Meta results}, and how many Meta products matched nothing on the site."""
     id_owner = {i: p["key"] for p in products for i in p["ids"]}
     title_owner = {_norm(p["title"]): p["key"] for p in products if p["title"]}
+    words = {p["key"]: set(_norm(p["title"]).split()) - _COMMON for p in products if p["title"]}
     out: dict[str, dict] = {}
     unmatched = 0
     for rid, m in by_id.items():
-        key = id_owner.get(rid) or title_owner.get(_norm(m["name"]))
+        key = id_owner.get(rid) or title_owner.get(_norm(m["name"])) or _closest(m["name"], words)
         if not key:
             unmatched += 1
             continue
@@ -182,8 +96,13 @@ def sync(session: Session, brand_id: int, years: int = 2) -> dict:
     from . import brands
     from .meta_client import MetaClient, MetaError
     from .settings_store import ad_account_path
+    from .store_api import StoreAPIError, read_store
     vals = brands.settings_for(session, brand_id)
-    platform, items = read_site(vals.get("store_url", ""))
+    try:
+        store = read_store(vals)
+    except StoreAPIError as ex:
+        raise ProductError(str(ex))
+    items = store["items"]
 
     meta: dict[str, dict] = {}
     unmatched, meta_note = 0, ""
@@ -200,6 +119,22 @@ def sync(session: Session, brand_id: int, years: int = 2) -> dict:
     else:
         meta_note = "Connect this store to Meta to see which products sell in ads."
 
+    # each product's home category: the smallest collection it is in, on a tie the one named like the product
+    for it in items:
+        words = set(_norm(it["title"]).split())
+        mine = [c for c in store["cats"] if it["pid"] in c["pids"]]
+        mine.sort(key=lambda c: (-len((set(_norm(c["name"]).split()) - {"apron", "aprons"}) & words),
+                                 len(c["pids"]), len(c["name"])))
+        if mine:
+            it["kind"] = mine[0]["name"]
+    save_site_categories(session, brand_id, [{"name": c["name"], "count": len(c["pids"])} for c in store["cats"]]
+                         or _categories_from_kinds(items))
+
+    # real sales: units sold per product, and its place among the store's best sellers
+    sold = {it["key"]: store["sales"].get(it["pid"], {}) for it in items}
+    order = sorted((k for k, v in sold.items() if v.get("units")), key=lambda k: -sold[k]["units"])
+    rank = {k: i + 1 for i, k in enumerate(order)}
+
     keep = {p.key: p for p in session.scalars(select(StoreProduct).where(StoreProduct.brand_id == brand_id))}
     now = datetime.utcnow()
     seen = set()
@@ -208,7 +143,11 @@ def sync(session: Session, brand_id: int, years: int = 2) -> dict:
         row.title, row.url, row.image = it["title"], it["url"], it["image"]
         row.site_price, row.currency, row.in_stock = it["site_price"], it["currency"], 1 if it["in_stock"] else 0
         row.ids, row.kind = it["ids"], it["kind"]
-        row.meta = meta.get(it["key"], {})
+        extra = {}
+        if sold[it["key"]].get("units"):
+            extra = {"store_units": sold[it["key"]]["units"], "store_revenue": round(sold[it["key"]]["revenue"], 2),
+                     "store_rank": rank[it["key"]], "store_window": store["sales_window"]}
+        row.meta = {**meta.get(it["key"], {}), **extra}
         row.synced_at = now
         if row.price_usd in (None, 0) and it["currency"] == "USD" and it["site_price"]:
             row.price_usd = it["site_price"]  # a USD store's price is already the plan's price
@@ -216,10 +155,139 @@ def sync(session: Session, brand_id: int, years: int = 2) -> dict:
         seen.add(it["key"])
     for k, row in keep.items():
         if k not in seen:
-            session.delete(row)  # gone from the site
+            session.delete(row)  # gone from the store
     session.commit()
-    return {"platform": platform, "products": len(items), "with_meta_results": len(meta),
-            "meta_products_not_on_site": unmatched, "note": meta_note}
+    notes = " ".join(n for n in (meta_note, store["note"]) if n)
+    return {"platform": store["platform"], "products": len(items), "with_meta_results": len(meta),
+            "meta_products_not_on_site": unmatched, "note": notes,
+            "categories": len(store["cats"]) or len(_categories_from_kinds(items)),
+            "with_sales": len(order), "sales_window": store["sales_window"]}
+
+
+def _categories_from_kinds(items: list[dict]) -> list[dict]:
+    """WooCommerce (and stores without collections): the category names the products carry."""
+    from collections import Counter
+    counts = Counter(k.strip() for it in items for k in (it.get("kind") or "").split(",") if k.strip())
+    return [{"name": n[:80], "count": c} for n, c in counts.most_common(40)]
+
+
+def _cat_key(brand_id: int) -> str:
+    return f"site_categories:{int(brand_id)}"
+
+
+def save_site_categories(session: Session, brand_id: int, cats: list[dict]) -> None:
+    import json
+
+    from .db import Setting
+    row = session.get(Setting, _cat_key(brand_id))
+    val = json.dumps(cats)
+    if row:
+        row.value = val
+    else:
+        session.add(Setting(key=_cat_key(brand_id), value=val))
+
+
+def site_categories(session: Session, brand_id: int) -> list[dict]:
+    """[{name, niche, note}]: the store's own categories, each tied to the app category used for estimates."""
+    import json
+
+    from .db import Setting
+    row = session.get(Setting, _cat_key(brand_id))
+    try:
+        cats = json.loads(row.value) if row and row.value else []
+    except ValueError:
+        cats = []
+    default = store_default(session, brand_id)
+    out = []
+    for c in cats:
+        g = guess_category(c["name"], "", default) or ("other", "")
+        out.append({"name": c["name"], "niche": g[0], "count": c.get("count", 0)})
+    return out
+
+
+# ---------- category: from the product's own words, else the store's usual one ----------
+
+_CELEB = re.compile(r"\b(inspired|movie|film|series|tv show|costume|cosplay|worn by|as seen|character|hero|villain)\b")
+_JACKET = re.compile(r"\b(jackets?|coats?|blazers?|gilets?|trench|bomber|biker|racer|varsity|parka)\b")
+_LEATHER = re.compile(r"\b(leather|suede|shearling|sheepskin|lambskin|cowhide)\b")
+_RULES = [  # first match wins; aprons first so "chef apron" is not kitchenware
+    (re.compile(r"\baprons?\b"), "other", None),
+    (re.compile(r"\b(smart ?watch|phones?|chargers?|earbuds|headphones?|speakers?|gadgets?|cables?|power ?banks?)\b"),
+     "electronics_gadgets", None),
+    (re.compile(r"\b(bags?|wallets?|belts?|purses?|backpacks?|totes?|satchels?|holdalls?|briefcases?|card ?holders?|clutch)\b"),
+     "bags_accessories", None),
+    (re.compile(r"\b(shoes?|boots?|sneakers?|trainers?|sandals?|loafers?|slippers?|heels|footwear)\b"), "footwear", None),
+    (re.compile(r"\b(rings?|necklaces?|bracelets?|earrings?|pendants?|watch(es)?|jewell?e?ry|bangles?)\b"), "jewelry_watches", None),
+    (re.compile(r"\b(cutlery|knife|knives|forks?|spoons?|dinner ?set|cookware|kitchen|plates?|bowls?|mugs?|tableware)\b"),
+     "kitchen_cutlery", None),
+    (re.compile(r"\b(cushions?|rugs?|curtains?|lamps?|vases?|decor|throws?|bedding|wall art)\b"), "home_decor", None),
+    (re.compile(r"\b(perfume|fragrance|serum|creams?|skin ?care|lipstick|make ?up|beauty)\b"), "beauty_skincare", None),
+    (re.compile(r"\b(swim\w*|bikinis?|beach ?wear|board ?shorts)\b"), "swimwear_summer", None),
+    (re.compile(r"\b(kids?|baby|babies|toys?|children)\b"), "kids_toys", None),
+    (re.compile(r"\b(dogs?|cats?|pets?|leash|collars? for)\b"), "pets", None),
+    (re.compile(r"\b(yoga|gym|fitness|dumbbells?|resistance band)\b"), "health_fitness", None),
+    (re.compile(r"\b(shirts?|t-?shirts?|tees?|hoodies?|sweatshirts?|dress(es)?|trousers?|jeans|kurtas?|abayas?|scarf|scarves|caps?|hats?)\b"),
+     "apparel", None),
+]
+
+
+def _apron_note(text: str) -> str:
+    # the main material comes first: "Canvas Work Apron | Leather Straps" is a canvas apron
+    if re.search(r"\b(canvas|denim|cotton|linen)\b", text):
+        return "Canvas aprons" if "canvas" in text else "Aprons"
+    return "Leather aprons" if _LEATHER.search(text) else "Aprons"
+
+
+def guess_category(title: str, kind: str, store_default: tuple[str, str] | None = None) -> tuple[str, str] | None:
+    """(category key, note) for a product, or None when even the store gives no hint.
+    store_default: the (category, note) of the store's latest plan."""
+    text = f"{title} {kind}".lower()
+    default_niche = store_default[0] if store_default else ""
+    if _JACKET.search(text) and not re.search(r"\baprons?\b", text):
+        if _CELEB.search(text) or default_niche == "celebrity_jackets":
+            return "celebrity_jackets", ""
+        if _LEATHER.search(text) or default_niche == "leather_jackets":
+            return "leather_jackets", ""
+        return "apparel", ""
+    for rx, niche, _ in _RULES:
+        if rx.search(text):
+            return (niche, _apron_note(text)) if niche == "other" else (niche, "")
+    return store_default or None
+
+
+def store_category(session: Session, brand_id: int) -> tuple[str, str] | None:
+    """What a store mostly sells, for a blank New plan: its products' most common category, else its own name
+    and web address ("apron.co.uk" sells aprons), else the category of its latest plan."""
+    from collections import Counter
+
+    from . import brands
+    rows = session.scalars(select(StoreProduct).where(StoreProduct.brand_id == brand_id)).all()
+    own = {c["name"]: c["niche"] for c in site_categories(session, brand_id)}
+    mine = Counter(p.kind for p in rows if p.in_stock and p.kind in own)
+    if mine:  # the store's own category that holds most of its products
+        name = mine.most_common(1)[0][0]
+        return own[name], name
+    counts = Counter(g for g in (guess_category(p.title, p.kind) for p in rows if p.in_stock) if g)
+    if counts:
+        return counts.most_common(1)[0][0]
+    try:
+        vals = brands.settings_for(session, brand_id)
+        names = {b["id"]: b["name"] for b in brands.all_brands(session)}
+    except brands.BrandError:
+        return None
+    host = re.sub(r"^https?://(www\.)?", "", vals.get("store_url", "") or "").split("/")[0]
+    words = re.sub(r"[._-]+", " ", f"{names.get(brand_id, '')} {host}")
+    # a web address is often one run-together word ("myapron", "trendyjackets"): look inside it too
+    for hint in ("apron", "jacket", "cutlery", "knife", "shoe", "boot", "bag", "wallet", "jewel", "watch", "perfume", "toy"):
+        if hint in host.lower() and hint not in words.lower().split():
+            words += f" {hint}"
+    return guess_category(words, "") or store_default(session, brand_id)
+
+
+def store_default(session: Session, brand_id: int) -> tuple[str, str] | None:
+    from .db import Plan
+    p = session.scalars(select(Plan).where(Plan.brand_id == brand_id).order_by(Plan.id.desc()).limit(1)).first()
+    return (p.niche, p.category_note or "") if p and p.niche else None
 
 
 # ---------- ranking ----------
@@ -243,6 +311,12 @@ def assess(p: StoreProduct) -> tuple[float, str, str]:
     if sales >= 1 and margin is not None and cpa >= margin:
         return 80, "Sells, but ads cost too much", \
             f"{sales} sale(s) at ${cpa:.2f} each, more than the ${margin:.2f} you keep. Raise the price or try new ads."
+    rank, units = int(m.get("store_rank") or 0), int(m.get("store_units") or 0)
+    if 0 < rank <= TOP_BEST:
+        keep = f" You keep ${margin:.2f} per order." if margin is not None else ""
+        ads = f"ads have only spent ${spend:.0f} on it" if spend else "it has not been advertised yet"
+        return 700 + (margin or 0) + sales * 10 - rank, f"Best seller in your store (#{rank})", \
+            f"{units} sold in your store ({m.get('store_window', '')}), and {ads}: a strong product to push.{keep}"
     if sales == 1:
         return 400 + (margin or 0), "One sale so far", \
             f"1 sale from ${spend:.0f} of ads. Promising: worth a proper test with its own budget."
@@ -251,21 +325,32 @@ def assess(p: StoreProduct) -> tuple[float, str, str]:
             f"{clicks} clicks from ${spend:.0f} of ads but no sale. Check the product page, price and photos first."
     if spend >= 20:
         return 20, "Spent without results", f"${spend:.0f} of ads with almost no clicks: the ad or the product did not catch on."
-    score = 300 + (margin if margin is not None else 0) + (10 if p.image else -50)
-    why = f"Never really advertised. You keep ${margin:.2f} per order" if margin is not None \
-        else "Never really advertised. Enter its price and costs to see the margin"
-    return score, "Not tested yet", why + "."
+    score = 300 + (margin if margin is not None else 0) + (10 if p.image else -50) + (60 - rank if rank else 0)
+    keep = f"You keep ${margin:.2f} per order" if margin is not None else "Enter its costs to see the margin"
+    if units:
+        keep += f". {units} sold in your store (#{rank})"
+    if spend > 0 or clicks > 0:
+        return score, "Barely tested", \
+            f"Only ${spend:.0f} of ads and {clicks} clicks so far: too little to judge. {keep}."
+    return score, "Not tested yet", f"Never advertised. {keep}."
 
 
 def ranked(session: Session, brand_id: int) -> list[dict]:
     rows = session.scalars(select(StoreProduct).where(StoreProduct.brand_id == brand_id)).all()
+    default = store_default(session, brand_id)
+    own = {c["name"] for c in site_categories(session, brand_id)}
     out = []
     for p in rows:
         score, verdict, reason = assess(p)
+        cat = guess_category(p.title, p.kind, default)
+        if cat and p.kind in own:
+            cat = (cat[0], p.kind)  # the store's own category name is the note the planner sees
         out.append({"key": p.key, "title": p.title, "url": p.url, "image": p.image, "site_price": p.site_price,
                     "currency": p.currency, "in_stock": bool(p.in_stock), "kind": p.kind,
                     "price_usd": p.price_usd or 0, "cost_usd": p.cost_usd or 0, "shipping_usd": p.shipping_usd or 0,
                     "meta": p.meta or {}, "score": round(score, 2), "verdict": verdict, "reason": reason,
+                    "niche": cat[0] if cat else "", "category_note": cat[1] if cat else "",
+                    "site_category": p.kind if p.kind in own else "",
                     "synced_at": p.synced_at.isoformat() if p.synced_at else ""})
     out.sort(key=lambda x: -x["score"])
     return out

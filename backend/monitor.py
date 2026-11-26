@@ -40,6 +40,8 @@ def check_launch(session: Session, client: MetaClient, launch: Launch, currency:
     plan: Plan = session.get(Plan, launch.plan_id)
     content = plan.versions[-1].content
     targets = content.get("monitoring_targets", {})
+    if (getattr(plan, "brief", None) or {}).get("max_cpa_pkr"):
+        targets = {**targets, "strict_cpa": True}   # the owner's own limit: no slack
 
     camp = client.campaign_status(launch.campaign_id)
     adsets, ads = client.campaign_objects(launch.campaign_id)

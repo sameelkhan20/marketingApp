@@ -811,3 +811,42 @@ body.team .owner-only { display: none !important; }
   .prod-row { grid-template-columns: 56px 1fr; }
   .prod-costs { grid-column: 1 / -1; grid-template-columns: repeat(3, 1fr); }
 }
+
+.brief-fill { margin: 4px 0 2px; flex-wrap: wrap; gap: 8px; }
+#brief-ads-do { margin: 4px 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--raised); border-radius: 6px; }
+
+.store-keys { margin: 6px 0 10px; }
+.store-keys .where { display: block; }
+
+/* Auto plan */
+.auto-card { margin-bottom: 16px; border-color: var(--accent); }
+.auto-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.auto-row .field { margin: 0; min-width: 150px; }
+.auto-row .btn { height: 40px; }
+#auto-why ul.why { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+#auto-why ul.why .sub { display: block; }
+
+/* plan page: the input form only when asked for; an open plan shows its estimate full width */
+.plan-top[hidden] { display: none; }
+.plan-top.no-form { grid-template-columns: 1fr; }
+.plan-top.no-form #plan-form { display: none; }
+.link-btn { margin-top: 8px; padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+
+/* the plan in short */
+.glance { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-ctrl); background: var(--surface); }
+.glance-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.glance-list li { display: grid; grid-template-columns: 150px 1fr; gap: 2px 14px; align-items: baseline; }
+.glance-list li > span { color: var(--text-3); font-size: 13px; }
+.glance-list li > b { font-weight: 600; color: var(--text); }
+.glance-list li > em { grid-column: 2; font-style: normal; color: var(--text-3); font-size: 13px; }
+@media (max-width: 700px) { .glance-list li { grid-template-columns: 1fr; } .glance-list li > em { grid-column: 1; } }
+#plan-view > .link-btn { margin: 10px 0 4px; }
+.why-line { padding: 4px 0; }
+.why-line summary { cursor: pointer; }
+.why-line p { margin: 4px 0 2px 16px; }
+
+/* why this plan: first, and open */
+.why-panel .why-sub { margin: 10px 0 4px; font-weight: 600; color: var(--text); }
+.why-panel ul { margin: 0; padding-left: 18px; display: grid; gap: 5px; }
+.why-panel ul.why .sub { display: block; }

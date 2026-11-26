@@ -67,7 +67,13 @@ def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
     selected = session.scalars(select(Creative).where(Creative.plan_id == plan.id, Creative.selected == 1)).all()
     covered = {c.creative_index for c in selected}
     url_images = [u for u in vals["creative_image_urls"].split(",") if u.strip()]
-    if covered or url_images:
+    brief = plan.brief or {}
+    if brief.get("scope") == "catalogue":
+        ok = bool(brief.get("product_set_id") and brief.get("catalog_id"))
+        add("catalogue", ok, f"Catalogue ads from '{brief.get('product_set_name', '')}': the pictures come from your "
+                             "catalogue" if ok else "The catalogue could not be read: add catalog_management to the Meta "
+                             "token, then make the plan again")
+    elif covered or url_images:
         missing = [i + 1 for i in range(n_creatives) if i not in covered]
         if not missing or url_images:
             add("images", True, f"{len(selected)} selected image(s)" + (f"; URL fallback for creatives {missing}" if missing else ""), hard=False)

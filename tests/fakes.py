@@ -58,7 +58,7 @@ class FakeMeta:
         return {"success": True}
 
     # creation
-    def create_campaign(self, act, name):
+    def create_campaign(self, act, name, **kw):
         return "CAMP1"
 
     def create_adset(self, act, **f):

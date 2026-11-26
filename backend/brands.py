@@ -17,9 +17,11 @@ from .db import Setting
 
 BRAND_FIELDS = ["meta_ad_account_id", "meta_page_id", "meta_pixel_id", "meta_ig_account_id", "store_url",
                 "creative_image_urls", "aud_pixel", "aud_visitors", "aud_buyers", "product_photo", "brand_style",
-                "winners", "aud_account"]
+                "winners", "aud_account", "shop_domain"]
+SECRET_FIELDS = ["meta_access_token", "shop_token", "woo_key", "woo_secret", "site_api_key"]  # encrypted, per store
 FORM_FIELDS = {"name", "meta_access_token", "meta_ad_account_id", "meta_page_id", "meta_pixel_id",
-               "meta_ig_account_id", "store_url", "creative_image_urls"}
+               "meta_ig_account_id", "store_url", "creative_image_urls",
+               "shop_domain", "shop_token", "woo_key", "woo_secret", "site_api_key"}
 
 
 class BrandError(ValueError):
@@ -47,8 +49,8 @@ def _store(session: Session, brands: list[dict]) -> None:
     session.commit()
 
 
-def _token_key(brand_id: int) -> str:
-    return f"brand{brand_id}:meta_access_token"
+def _token_key(brand_id: int, field: str = "meta_access_token") -> str:
+    return f"brand{brand_id}:{field}"
 
 
 def main_name(session: Session) -> str:
@@ -67,7 +69,8 @@ def settings_for(session: Session, brand_id: int | None) -> dict:
     out = dict(base)
     for k in BRAND_FIELDS:
         out[k] = b.get(k, "") or ""
-    out["meta_access_token"] = secrets_store.get(_token_key(brand_id))
+    for k in SECRET_FIELDS:
+        out[k] = secrets_store.get(_token_key(brand_id, k))
     return out
 
 
@@ -85,12 +88,12 @@ def all_brands(session: Session) -> list[dict]:
 
 
 def brand_out(session: Session, brand_id: int) -> dict:
-    """One brand for the edit form: the token masked, never sent back."""
+    """One brand for the edit form: every key masked, never sent back."""
     v = settings_for(session, brand_id)
     out = {"id": brand_id, "name": main_name(session) if not brand_id else
            next(b.get("name", "") for b in _load(session) if b["id"] == brand_id)}
     for k in FORM_FIELDS - {"name"}:
-        out[k] = ("********" if v.get(k) else "") if k == "meta_access_token" else v.get(k, "")
+        out[k] = ("********" if v.get(k) else "") if k in SECRET_FIELDS else v.get(k, "")
     return out
 
 
@@ -98,7 +101,7 @@ def save(session: Session, brand_id: int | None, values: dict) -> int:
     """Create (brand_id None) or update a brand. Returns its id. Brand 0 is the main store."""
     values = {k: str(v).strip() for k, v in (values or {}).items() if k in FORM_FIELDS}
     name = values.pop("name", None)
-    token = values.pop("meta_access_token", None)
+    secrets = {k: values.pop(k) for k in SECRET_FIELDS if k in values}
     if brand_id == 0:
         if name:
             row = session.get(Setting, "brand_main_name")
@@ -107,8 +110,7 @@ def save(session: Session, brand_id: int | None, values: dict) -> int:
             else:
                 session.add(Setting(key="brand_main_name", value=name[:80]))
             session.commit()
-        if token is not None:
-            values["meta_access_token"] = token
+        values.update(secrets)  # set_many keeps the masked ones and encrypts the rest
         settings_store.set_many(session, values)
         return 0
     with _lock:
@@ -133,8 +135,9 @@ def save(session: Session, brand_id: int | None, values: dict) -> int:
             b["name"] = name[:80]
         for k, v in values.items():
             b[k] = v
-        if token is not None and token != "********":
-            secrets_store.put({_token_key(brand_id): token})  # an empty value clears it
+        for k, v in secrets.items():
+            if v != "********":
+                secrets_store.put({_token_key(brand_id, k): v})  # an empty value clears it
         _store(session, brands)
         return brand_id
 
@@ -177,7 +180,7 @@ def delete(session: Session, brand_id: int) -> None:
     _check_nothing_spends(session, brand_id, [l for p in plans for l in session.query(Launch).filter(Launch.plan_id == p.id)])
     with _lock:
         brands = [b for b in _load(session) if b["id"] != brand_id]
-        secrets_store.delete(_token_key(brand_id))
+        secrets_store.delete(*(_token_key(brand_id, k) for k in SECRET_FIELDS))
         _store(session, brands)
 
 

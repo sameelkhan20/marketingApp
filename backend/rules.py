@@ -93,7 +93,7 @@ def evaluate(metrics: list[dict], targets: dict, plan_daily_usd: float, days_act
                 sev = "critical" if m["spend_usd"] >= 2 * max_cpa else "warning"
                 findings.append(_f("no_purchases", sev, lvl, m["object_id"], name,
                                    f"${m['spend_usd']} spent with 0 purchases (target CPA ${max_cpa}).", m))
-            elif m["cpa_usd"] > max_cpa * 1.25:
+            elif m["cpa_usd"] > max_cpa * (1.0 if targets.get("strict_cpa") else 1.25):
                 sev = "critical" if m["cpa_usd"] > max_cpa * 2 else "warning"
                 findings.append(_f("high_cpa", sev, lvl, m["object_id"], name,
                                    f"CPA ${m['cpa_usd']} is above target ${max_cpa}.", m))
