@@ -182,12 +182,14 @@ function formInputs() {
     returns: (fd.get("returns") || "").trim(),
     social_proof: (fd.get("social_proof") || "").trim(),
     cod: fd.get("country") === "PK" && !!$("#plan-form").elements.cod.checked,
+    landing_url: (fd.get("landing_url") || "").trim(),
   };
 }
 
 function fillForm(inputs) {
   const f = $("#plan-form");
   f.elements.unit_cost_usd.value = ""; f.elements.shipping_usd.value = ""; f.elements.category_note.value = "";
+  f.elements.landing_url.value = "";
   for (const k of ["offer", "usp", "delivery_days", "returns", "social_proof"]) f.elements[k].value = "";
   f.elements.price_usd.dataset.touched = "1";  // a saved plan's price is a real choice
   f.elements.cod.checked = false;
@@ -204,6 +206,7 @@ function fillForm(inputs) {
 
 const PAGES = {
   today: ["Today", "What needs your attention now, ranked"],
+  products: ["Products", "Your store's products, ranked by what sells in your ads and what you keep per order"],
   plan: ["New plan", "Tell the app what you sell and where; it shows the orders to expect and writes the full plan"],
   history: ["My plans", "Every plan with its estimate and, once launched, the real result. Click one to open it"],
   rules: ["Learning", "How estimates compare with results, and the rules the planner now follows"],
@@ -236,6 +239,7 @@ function newPlan() {
   const f = $("#plan-form");
   f.elements.product.value = "";
   f.elements.category_note.value = "";
+  f.elements.landing_url.value = "";
   delete f.elements.price_usd.dataset.touched;  // a new plan gets the category's usual price again
   $("#plan-card").hidden = true;
   $("#estimate-card").hidden = true;
@@ -273,13 +277,13 @@ function showView(name) {
   $("#btn-new-plan").hidden = !(name === "plan" && currentPlan);
   $("#sidebar").classList.remove("open");
   const loaders = { history: loadHistory, rules: loadRules, meta: loadMeta, monitor: loadMonitor, activity: loadActivity,
-                    today: loadToday, billing: loadBilling, account: loadAccount };
+                    today: loadToday, billing: loadBilling, account: loadAccount, products: loadProducts };
   if (loaders[name] && tokens.access) Promise.resolve().then(() => loaders[name]()).catch((e) => toast(e.message, true));
 }
 
 // ---------- init ----------
 
-const VIEWS = ["today", "plan", "history", "rules", "monitor", "meta", "activity", "billing", "account"];
+const VIEWS = ["today", "products", "plan", "history", "rules", "monitor", "meta", "activity", "billing", "account"];
 function viewFromHash() {
   const v = location.hash.slice(1);
   showView(VIEWS.includes(v) ? v : "today");
@@ -1548,6 +1552,10 @@ async function loadBrandOptions() {
   ss.value = BRANDS.some((b) => String(b.id) === keepStats) ? keepStats : "0";
   ss.hidden = BRANDS.length < 2;
   if (keepStats && ss.value !== keepStats) loadStats().catch(() => {});  // the shown store was deleted
+  const ps = $("#prod-store"), keepProd = ps.value;
+  ps.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
+  ps.value = BRANDS.some((b) => String(b.id) === keepProd) ? keepProd : "0";
+  ps.hidden = BRANDS.length < 2;
 }
 $("#stats-store").addEventListener("change", () => loadStats().catch((e) => toast(e.message, true)));
 
@@ -1680,3 +1688,102 @@ function renderPolicy(plan) {
     + items.map((f) => `<div class="check ${f.level === "block" ? "fail" : "warn"}">${icon(f.level === "block" ? "x" : "alert")}<span><b>${esc(f.where)}:</b> ${esc(f.text)}</span></div>`).join("")
     + `<p class="hint" style="margin-top:8px">Rejected ads hurt the ad account's standing. Use Edit to change the words.</p>`;
 }
+
+
+// ---------- products: which one to advertise next ----------
+
+const VERDICT_TAG = { "Proven seller": "approved", "One sale so far": "on_track", "Not tested yet": "neutral",
+  "Clicks, no sales": "warning", "Sells, but ads cost too much": "warning", "Spent without results": "low",
+  "Loses money": "behind", "Out of stock": "behind" };
+let PRODUCTS = [];
+
+async function loadProducts() {
+  const bid = +($("#prod-store").value || 0);
+  const rows = await api(`/api/products?brand_id=${bid}`);
+  if (bid !== +($("#prod-store").value || 0)) return;  // another store was picked meanwhile
+  PRODUCTS = rows;
+  renderProducts();
+}
+
+function renderProducts() {
+  const box = $("#prod-list");
+  if (!PRODUCTS.length) { box.innerHTML = `<p class="muted">No products yet. Press Read products</p>`; return; }
+  const top = PRODUCTS[0];
+  const site = (p) => p.site_price ? `${p.currency ? esc(p.currency) + " " : ""}${(+p.site_price).toFixed(2)} on the site` : "";
+  const metaLine = (m) => m && (m.spend_usd || m.clicks || m.purchases)
+    ? `${fmt.usd(m.spend_usd || 0)} ads · ${fmt.int(m.clicks || 0)} clicks · <b>${fmt.int(m.purchases || 0)} sales</b>`
+    : `<span class="sub">no ad results yet</span>`;
+  box.innerHTML = `
+    <div class="prod-best">${icon("check")}<span><b>Best next: ${esc(top.title)}</b> · ${esc(top.reason)}</span></div>
+    ${PRODUCTS.map((p, i) => `
+    <div class="prod-row" data-key="${esc(p.key)}">
+      <div class="prod-img">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : icon("image")}</div>
+      <div class="prod-main">
+        <div class="prod-title"><span class="mono sub">${i + 1}</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a></div>
+        <div class="sub">${site(p)}${p.kind ? ` · ${esc(p.kind)}` : ""}</div>
+        <div class="sub">${metaLine(p.meta)}</div>
+        <div class="prod-why"><span class="tag ${VERDICT_TAG[p.verdict] || "neutral"}">${esc(p.verdict)}</span> <span>${esc(p.reason)}</span></div>
+      </div>
+      <div class="prod-costs">
+        <label><span>Price</span><div class="affix"><em>USD</em><input type="number" min="0" step="0.5" data-f="price_usd" value="${p.price_usd || ""}" /></div></label>
+        <label><span>Cost</span><div class="affix"><em>USD</em><input type="number" min="0" step="0.5" data-f="cost_usd" value="${p.cost_usd || ""}" /></div></label>
+        <label><span>Shipping</span><div class="affix"><em>USD</em><input type="number" min="0" step="0.5" data-f="shipping_usd" value="${p.shipping_usd || ""}" /></div></label>
+        <button class="btn small primary" data-plan="${esc(p.key)}" ${p.in_stock ? "" : "disabled"}>Make plan</button>
+      </div>
+    </div>`).join("")}`;
+}
+
+// prices and costs save on their own; the ranking follows
+$("#prod-list").addEventListener("change", async (ev) => {
+  const row = ev.target.closest(".prod-row");
+  if (!row || !ev.target.dataset.f) return;
+  const p = PRODUCTS.find((x) => x.key === row.dataset.key);
+  if (!p) return;
+  p[ev.target.dataset.f] = +ev.target.value || 0;
+  try {
+    const bid = +($("#prod-store").value || 0);
+    const r = await api(`/api/products/${bid}/costs?key=${encodeURIComponent(p.key)}`, { method: "POST",
+      body: { price_usd: p.price_usd || 0, cost_usd: p.cost_usd || 0, shipping_usd: p.shipping_usd || 0 } });
+    Object.assign(p, r);
+    PRODUCTS.sort((a, b) => b.score - a.score);
+    renderProducts();
+  } catch (e) { toast(e.message, true); }
+});
+
+// a plan for this product: the New plan form, filled in
+$("#prod-list").addEventListener("click", (ev) => {
+  const b = ev.target.closest("[data-plan]");
+  if (!b) return;
+  const p = PRODUCTS.find((x) => x.key === b.dataset.plan);
+  if (!p) return;
+  if (!p.price_usd) { toast("Enter this product's price in USD first.", true); return; }
+  newPlan();
+  const f = $("#plan-form");
+  f.elements.brand_id.value = $("#prod-store").value || "0";
+  f.elements.product.value = p.title;
+  f.elements.price_usd.value = p.price_usd; f.elements.price_usd.dataset.touched = "1";
+  f.elements.unit_cost_usd.value = p.cost_usd || "";
+  f.elements.shipping_usd.value = p.shipping_usd || "";
+  f.elements.landing_url.value = p.url || "";
+  go("plan");
+  window.scrollTo({ top: 0 });
+  updateConversions();
+  liveEstimate();
+  toast("Filled in from the product. Pick the country, budget and category, then create the plan.");
+});
+
+$("#prod-store").addEventListener("change", () => loadProducts().catch((e) => toast(e.message, true)));
+
+$("#btn-prod-sync").addEventListener("click", async () => {
+  const btn = $("#btn-prod-sync");
+  btn.disabled = true;
+  $("#prod-info").textContent = "Reading the store's products and their Meta results (up to a minute)";
+  try {
+    const bid = +($("#prod-store").value || 0);
+    const r = await api(`/api/brands/${bid}/products/sync`, { method: "POST" });
+    $("#prod-info").textContent = `${r.products} products read from the ${r.platform === "shopify" ? "Shopify" : "WooCommerce"} site; `
+      + `${r.with_meta_results} have Meta ad results.${r.note ? " " + r.note : ""}`;
+    await loadProducts();
+  } catch (e) { $("#prod-info").textContent = e.message; toast(e.message, true); }
+  finally { btn.disabled = false; }
+});

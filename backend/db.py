@@ -131,6 +131,28 @@ class StoreStat(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StoreProduct(Base):
+    """A product read from a store's site, with its Meta ad results and the owner's price and costs."""
+
+    __tablename__ = "store_products"
+
+    brand_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)    # "shopify:<id>" or "woo:<id>"
+    title: Mapped[str] = mapped_column(String(200), default="")
+    url: Mapped[str] = mapped_column(String(500), default="")
+    image: Mapped[str] = mapped_column(String(500), default="")
+    site_price: Mapped[float] = mapped_column(Float, default=0)        # in the site's own currency
+    currency: Mapped[str] = mapped_column(String(3), default="")
+    in_stock: Mapped[int] = mapped_column(Integer, default=1)
+    kind: Mapped[str] = mapped_column(String(80), default="")
+    ids: Mapped[list] = mapped_column(JSON, default=list)               # product, variant and SKU ids (to match Meta)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)              # spend, clicks, purchases from catalogue ads
+    price_usd: Mapped[float] = mapped_column(Float, default=0)          # entered by the owner (or a USD site's price)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    shipping_usd: Mapped[float] = mapped_column(Float, default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 def stat_rows(session, brand_id: int = 0) -> list:
     """The synced history of one store, biggest spend first."""
     from sqlalchemy import select

@@ -1,4 +1,5 @@
 import json
+import re
 import secrets
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
@@ -51,6 +52,7 @@ OWNER_ROUTES = {
     ("GET", "/api/brands/{brand_id}"), ("POST", "/api/brands"), ("POST", "/api/brands/{brand_id}"),
     ("DELETE", "/api/brands/{brand_id}"), ("POST", "/api/brands/{brand_id}/check"),
     ("POST", "/api/brands/{brand_id}/winners"), ("POST", "/api/brands/{brand_id}/sync"),
+    ("POST", "/api/brands/{brand_id}/products/sync"),
 }
 
 
@@ -117,7 +119,7 @@ async def security_headers(request: Request, call_next):
     if not request.url.path.startswith("/api/"):
         h.setdefault("Content-Security-Policy",
                      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                     "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; "
+                     "font-src https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self'; "
                      "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
     if request.url.scheme == "https":
         h.setdefault("Strict-Transport-Security", "max-age=31536000")
@@ -146,6 +148,7 @@ ACTIVITY_ROUTES = [
     ("POST", r"/api/meta/sync", "settings", "meta_synced", "Meta history synced"),
     ("POST", r"/api/brands/(\d+)/winners", "settings", "winners_synced", "Best ads synced for store #{0}"),
     ("POST", r"/api/brands/(\d+)/sync", "settings", "store_synced", "History and best ads synced for store #{0}"),
+    ("POST", r"/api/brands/(\d+)/products/sync", "settings", "products_synced", "Products read for store #{0}"),
     ("POST", r"/api/brands", "settings", "store_added", "Store added"),
     ("POST", r"/api/brands/(\d+)", "settings", "store_saved", "Store #{0} saved"),
     ("DELETE", r"/api/brands/(\d+)", "settings", "store_deleted", "Store #{0} deleted"),
@@ -238,6 +241,14 @@ class PlanRequest(BaseModel):
             raise ValueError(f"niche must be one of {', '.join(NICHE_MULTIPLIERS)}")
         return v
 
+    @field_validator("landing_url")
+    @classmethod
+    def _web_link(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v and not re.match(r"^https?://[^\s/]+\.[^\s]+$", v):
+            raise ValueError("The ad link must be a web address like https://yourstore.com/products/...")
+        return v
+
     @model_validator(mode="after")
     def _other_needs_words(self):
         if self.niche == "other" and len(self.category_note.strip()) < 3:
@@ -254,6 +265,7 @@ class PlanRequest(BaseModel):
     returns: str = Field(default="", max_length=150)
     social_proof: str = Field(default="", max_length=200)
     cod: bool = False                                          # cash on delivery offered
+    landing_url: str = Field(default="", max_length=500)      # the product page the ads open (else the store URL)
     unit_cost_usd: float = Field(ge=0, default=0)   # what one item costs you
     shipping_usd: float = Field(ge=0, default=0)    # shipping + packing per order
 
@@ -297,6 +309,7 @@ def _plan_out(p: Plan) -> dict:
             **{k: (p.brief or {}).get(k, 0 if k == "delivery_days" else "")
                for k in ("offer", "usp", "delivery_days", "returns", "social_proof")},
             "cod": bool((p.brief or {}).get("cod", False)),
+            "landing_url": (p.brief or {}).get("landing_url", ""),
             "unit_cost_usd": (p.estimate or {}).get("assumptions", {}).get("unit_cost_usd", 0),
             "shipping_usd": (p.estimate or {}).get("assumptions", {}).get("shipping_usd", 0),
         },
@@ -370,7 +383,7 @@ def create_plan(req: PlanRequest):
             niche=req.niche, price_usd=req.price_usd, duration_days=req.duration_days, estimate=e,
             category_note=req.category_note.strip(), brand_id=req.brand_id,
             brief={k: (v.strip() if isinstance(v, str) else v) for k, v in req.model_dump().items()
-                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod")},
+                   if k in ("offer", "usp", "delivery_days", "returns", "social_proof", "cod", "landing_url")},
         )
         p.versions.append(PlanVersion(version=1, source="ai", content=content))
         s.add(p)
@@ -572,8 +585,9 @@ def delete_brand(brand_id: int):
             brands.delete(s, brand_id)
         except brands.BrandError as ex:
             raise HTTPException(400, str(ex))
-        from .db import StoreStat
+        from .db import StoreProduct, StoreStat
         s.query(StoreStat).filter(StoreStat.brand_id == brand_id).delete()
+        s.query(StoreProduct).filter(StoreProduct.brand_id == brand_id).delete()
         s.commit()
         return {"ok": True}
 
@@ -614,6 +628,46 @@ def sync_brand(brand_id: int):
             result["winners_error"] = str(ex)
         result.pop("account", None)
     return result
+
+
+@app.post("/api/brands/{brand_id}/products/sync")
+def sync_store_products(brand_id: int):
+    """Read the store's products from its site and what each did in Meta ads."""
+    from . import brands, products
+    with get_session() as s:
+        try:
+            return products.sync(s, brand_id)
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
+        except products.ProductError as ex:
+            raise HTTPException(400, str(ex))
+
+
+@app.get("/api/products")
+def list_products(brand_id: int = 0):
+    from . import products
+    with get_session() as s:
+        return products.ranked(s, brand_id)
+
+
+class ProductCosts(BaseModel):
+    price_usd: float = Field(ge=0, le=100000)
+    cost_usd: float = Field(ge=0, le=100000)
+    shipping_usd: float = Field(ge=0, le=100000)
+
+
+@app.post("/api/products/{brand_id}/costs")
+def save_product_costs(brand_id: int, key: str, body: ProductCosts):
+    from .db import StoreProduct
+    from . import products
+    with get_session() as s:
+        row = s.get(StoreProduct, (brand_id, key))
+        if not row:
+            raise HTTPException(404, "Product not found. Read the products again")
+        row.price_usd, row.cost_usd, row.shipping_usd = body.price_usd, body.cost_usd, body.shipping_usd
+        s.commit()
+        score, verdict, reason = products.assess(row)
+        return {"score": round(score, 2), "verdict": verdict, "reason": reason}
 
 
 @app.get("/api/brands/{brand_id}/winners")
@@ -846,7 +900,7 @@ def launch(plan_id: int):
         s.refresh(p)
         from . import brands
         try:
-            vals = brands.settings_for(s, p.brand_id)
+            vals = brands.with_landing(brands.settings_for(s, p.brand_id), p)
         except brands.BrandError as ex:
             p.status = "approved"
             s.commit()

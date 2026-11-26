@@ -8,7 +8,7 @@
   <link rel="apple-touch-icon" href="/static/icon.svg?v=1" />
   <meta name="theme-color" content="#f0f2f5" />
   <script src="/static/theme.js?v=1"></script>
-  <link rel="stylesheet" href="/static/styles.css?v=18" />
+  <link rel="stylesheet" href="/static/styles.css?v=19" />
 </head>
 <body>
   <!-- Icon sprite (lucide, 1.5 stroke) -->
@@ -75,6 +75,7 @@
       <nav class="nav">
         <button data-view="today" class="nav-item active"><svg class="icon"><use href="#i-sun"/></svg>Today</button>
         <div class="nav-label">Plan</div>
+        <button data-view="products" class="nav-item"><svg class="icon"><use href="#i-search"/></svg>Products</button>
         <button data-view="plan" class="nav-item"><svg class="icon"><use href="#i-plus"/></svg>New plan</button>
         <button data-view="history" class="nav-item"><svg class="icon"><use href="#i-list"/></svg>My plans</button>
         <div class="nav-label">Run</div>
@@ -126,6 +127,9 @@
               <label class="field"><span>Target country</span><select name="country" id="country"></select></label>
               <label class="field"><span>Product</span>
                 <input name="product" type="text" placeholder="e.g. Black biker leather jacket, 24-piece cutlery set" maxlength="200" required />
+              </label>
+              <label class="field"><span>Ad link <em class="opt">optional, the product page</em></span>
+                <input name="landing_url" type="url" maxlength="500" placeholder="https://yourstore.com/products/... (else the store URL)" />
               </label>
               <label class="field"><span>Product category</span><select name="niche" id="niche"></select></label>
               <label class="field" id="note-field"><span id="note-label">What is it exactly? <em class="opt">optional</em></span>
@@ -265,6 +269,22 @@
         </section>
 
         <!-- ================= HISTORY ================= -->
+        <section id="view-products" class="view" hidden>
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">Which product to advertise next</div>
+                <p class="hint" id="prod-info">Reads the products from your store's site and what each one did in your Meta ads. Enter price and costs, and the best product rises to the top</p>
+              </div>
+              <div class="toolbar">
+                <select id="prod-store" aria-label="Store" hidden></select>
+                <button id="btn-prod-sync" class="btn owner-only"><svg class="icon"><use href="#i-refresh"/></svg>Read products</button>
+              </div>
+            </div>
+            <div id="prod-list" class="prod-list"><p class="muted">No products yet. Press Read products</p></div>
+          </div>
+        </section>
+
         <section id="view-history" class="view" hidden>
           <div class="card flush">
             <table class="table" id="history-table">
@@ -593,6 +613,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=24"></script>
+  <script src="/static/app.js?v=25"></script>
 </body>
 </html>

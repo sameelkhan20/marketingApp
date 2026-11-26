@@ -226,6 +226,17 @@ class MetaClient:
             limit=500,
         )
 
+    def product_insights(self, act: str, since: str, until: str) -> list[dict]:
+        """One row per catalogue product over the whole period ("<retailer id>, <name>" in product_id)."""
+        return self.get_all(
+            f"{act}/insights",
+            level="account",
+            breakdowns="product_id",
+            time_range={"since": since, "until": until},
+            fields="spend,impressions,inline_link_clicks,actions,action_values",
+            limit=500,
+        )
+
     def ad_copy(self, ad_id: str) -> dict:
         """The headline and text of an ad's creative (also for carousels)."""
         d = self.get(ad_id, fields="creative{title,body,object_story_spec}")

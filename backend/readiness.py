@@ -14,7 +14,7 @@ from .settings_store import ad_account_path
 def check_plan(session: Session, plan: Plan, live: bool = True) -> dict:
     from . import brands
     try:
-        vals = brands.settings_for(session, plan.brand_id)
+        vals = brands.with_landing(brands.settings_for(session, plan.brand_id), plan)
     except brands.BrandError as ex:
         return {"ready": False, "checks": [{"key": "brand", "ok": False, "hard": True, "text": str(ex)}]}
     checks: list[dict] = []

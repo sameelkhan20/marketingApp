@@ -217,6 +217,12 @@ def accounts(session: Session) -> set[str]:
     return out
 
 
+def with_landing(vals: dict, plan) -> dict:
+    """The store's settings with the plan's own ad link (a product page) in place of the store URL."""
+    link = ((getattr(plan, "brief", None) or {}).get("landing_url") or "").strip()
+    return {**vals, "store_url": link} if link else vals
+
+
 def launch_brand(session: Session, launch) -> int:
     """The brand a launch was made with (stored on the launch; older launches: their plan's)."""
     bid = (launch.objects or {}).get("brand_id")
