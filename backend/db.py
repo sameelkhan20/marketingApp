@@ -109,6 +109,44 @@ class AccountStat(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class StoreStat(Base):
+    """Same as AccountStat, for each store added under Stores (brand_id >= 1), from that store's own ad
+    account. The main store (brand 0) keeps using account_stats, so its synced history is untouched."""
+
+    __tablename__ = "store_stats"
+
+    brand_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    country: Mapped[str] = mapped_column(String(4), primary_key=True)
+    since: Mapped[str] = mapped_column(String(10))
+    until: Mapped[str] = mapped_column(String(10))
+    spend_usd: Mapped[float] = mapped_column(Float)
+    impressions: Mapped[int] = mapped_column(Integer)
+    clicks: Mapped[int] = mapped_column(Integer)
+    purchases: Mapped[int] = mapped_column(Integer)
+    revenue_usd: Mapped[float] = mapped_column(Float, default=0)
+    cpm_usd: Mapped[float] = mapped_column(Float)
+    ctr: Mapped[float] = mapped_column(Float)
+    cvr: Mapped[float] = mapped_column(Float)
+    confidence: Mapped[str] = mapped_column(String(10))
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+def stat_rows(session, brand_id: int = 0) -> list:
+    """The synced history of one store, biggest spend first."""
+    from sqlalchemy import select
+    if brand_id:
+        q = select(StoreStat).where(StoreStat.brand_id == int(brand_id))
+        return list(session.scalars(q.order_by(StoreStat.spend_usd.desc())))
+    return list(session.scalars(select(AccountStat).order_by(AccountStat.spend_usd.desc())))
+
+
+def stat_for(session, brand_id: int, country: str):
+    """One store's history for one country, or None."""
+    if brand_id:
+        return session.get(StoreStat, (int(brand_id), country.upper()))
+    return session.get(AccountStat, country.upper())
+
+
 class Launch(Base):
     """A plan pushed to Meta. Everything is created PAUSED; the user activates in Ads Manager."""
 

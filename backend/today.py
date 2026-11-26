@@ -114,6 +114,12 @@ def build() -> dict:
             elif not bv["meta_pixel_id"]:
                 items.append(_item("high", f"Add {names[bid]}'s pixel id",
                                    "Without it its ads optimise for clicks, not purchases, and retargeting is off.", "meta", "Open Stores"))
+            else:
+                from .db import stat_rows
+                if not stat_rows(s, bid):
+                    items.append(_item("medium", f"Sync {names[bid]}'s history",
+                                       "Its own two years of results make its order estimates far more accurate than benchmarks.",
+                                       "meta", "Open Stores"))
         if 0 not in used:
             pass  # the main store is not used by any plan: no setup nagging for it
         elif not vals["meta_access_token"] or not vals["meta_ad_account_id"]:

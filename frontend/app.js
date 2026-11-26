@@ -1164,7 +1164,8 @@ $("#btn-sync").addEventListener("click", async () => {
   const btn = $("#btn-sync");
   btn.disabled = true;
   try {
-    const r = await api("/api/meta/sync", { method: "POST" });
+    const bid = +($("#stats-store").value || 0);
+    const r = await api(bid ? `/api/brands/${bid}/sync` : "/api/meta/sync", { method: "POST" });
     $("#sync-info").textContent = `Synced ${r.rows} monthly rows for ${r.countries} countries, ${r.since} to ${r.until}, in ${r.currency}`;
     toast(`History synced. Estimates now use your account data${r.winners ? `; ${r.winners} best-selling ads will guide new plans` : ""}.`);
     await loadStats();
@@ -1173,12 +1174,15 @@ $("#btn-sync").addEventListener("click", async () => {
 });
 
 async function loadStats() {
-  const rows = await api("/api/meta/stats");
+  const bid = +($("#stats-store").value || 0);
+  const rows = await api(`/api/meta/stats?brand_id=${bid}`);
+  if (bid !== +($("#stats-store").value || 0)) return;  // another store was picked meanwhile
   $("#stats-table tbody").innerHTML = rows.length ? rows.map((r) => `
     <tr><td>${esc(r.name)} <span class="sub">${esc(r.country)}</span></td><td class="num">${fmt.usd(r.spend_usd)}</td><td class="num">${fmt.int(r.impressions)}</td>
     <td class="num">${fmt.int(r.clicks)}</td><td class="num">${fmt.int(r.purchases)}</td><td class="num">${fmt.usd(r.cpm_usd)}</td><td class="num">${fmt.pct(r.ctr)}</td>
     <td class="num">${fmt.pct(r.cvr)}</td><td><span class="tag ${r.confidence}">${r.confidence}</span></td></tr>`).join("")
-    : `<tr class="empty"><td colspan="9">No history yet. Save the Meta settings, then sync</td></tr>`;
+    : `<tr class="empty"><td colspan="9">No history for this store yet. Press Sync from Meta</td></tr>`;
+  if (!rows.length) $("#sync-info").textContent = "Last two years. Until a store syncs, its plans use benchmarks";
   if (rows.length) $("#sync-info").textContent = `Synced ${utc(rows[0].synced_at).toLocaleString()} · ${rows[0].since} to ${rows[0].until} · these replace the benchmarks for each country listed`;
 }
 
@@ -1539,7 +1543,13 @@ async function loadBrandOptions() {
   sel.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}${b.connected ? "" : " (not connected)"}</option>`).join("");
   if (keep && BRANDS.some((b) => String(b.id) === keep)) sel.value = keep;
   $("#brand-field").hidden = BRANDS.length < 2;
+  const ss = $("#stats-store"), keepStats = ss.value;
+  ss.innerHTML = BRANDS.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("");
+  ss.value = BRANDS.some((b) => String(b.id) === keepStats) ? keepStats : "0";
+  ss.hidden = BRANDS.length < 2;
+  if (keepStats && ss.value !== keepStats) loadStats().catch(() => {});  // the shown store was deleted
 }
+$("#stats-store").addEventListener("change", () => loadStats().catch((e) => toast(e.message, true)));
 
 async function loadBrandList() {
   await loadBrandOptions();
@@ -1644,12 +1654,16 @@ $("#plan-form").elements.brand_id.addEventListener("change", () => {
 
 $("#btn-brand-winners").addEventListener("click", async () => {
   const btn = $("#btn-brand-winners"), out = $("#brand-check");
-  btn.disabled = true; out.textContent = "Reading this store's ad history (up to a minute)";
+  btn.disabled = true; out.textContent = "Reading two years of this store's ad account (up to a minute)";
   try {
     const id = await saveBrand();
-    const r = await api(`/api/brands/${id}/winners`, { method: "POST" });
-    out.textContent = r.winners ? `${r.winners} best-selling ads found (${r.since} to ${r.until}). New plans for this store start from them.`
-      : "No ad with 3 or more purchases in the last 2 years yet.";
+    const r = await api(`/api/brands/${id}/sync`, { method: "POST" });
+    const hist = r.countries ? `History: ${r.countries} countries, ${r.since} to ${r.until} (in ${r.currency}). This store's estimates now use it.`
+      : "History: no results in the last 2 years yet, so this store's estimates use benchmarks.";
+    const wins = r.winners_error ? `Best ads could not be read: ${r.winners_error}`
+      : r.winners ? `Best ads: ${r.winners} found; new plans for this store start from them.` : "Best ads: none with 3 or more purchases yet.";
+    out.innerHTML = `<div>${esc(hist)}</div><div>${esc(wins)}</div>`;
+    if (+($("#stats-store").value || 0) === +id) loadStats().catch(() => {});
   } catch (e) { out.innerHTML = `<span style="color:var(--neg)">${esc(e.message)}</span>`; }
   finally { btn.disabled = false; }
 });

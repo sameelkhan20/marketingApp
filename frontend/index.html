@@ -553,7 +553,7 @@
               <div class="form-actions">
                 <button type="button" class="btn ghost danger-text" id="btn-brand-delete" hidden>Delete store</button>
                 <button type="button" class="btn" id="btn-brand-cancel">Cancel</button>
-                <button type="button" class="btn" id="btn-brand-winners" title="Reads this store's ad history and keeps its best-selling ads for the planner">Sync best ads</button>
+                <button type="button" class="btn" id="btn-brand-winners" title="Reads two years of this store's ad account: results per country for its estimates, and its best-selling ads">Sync from Meta</button>
                 <button type="button" class="btn" id="btn-brand-check">Check connection</button>
                 <button type="submit" class="btn primary">Save store</button>
               </div>
@@ -566,7 +566,10 @@
                 <div class="card-title">Account history by country</div>
                 <p class="hint" id="sync-info">Last two years. These figures replace the benchmarks in the estimator for every country listed</p>
               </div>
-              <button id="btn-sync" class="btn owner-only"><svg class="icon"><use href="#i-refresh"/></svg>Sync from Meta</button>
+              <div class="toolbar">
+                <select id="stats-store" aria-label="Store" hidden></select>
+                <button id="btn-sync" class="btn owner-only"><svg class="icon"><use href="#i-refresh"/></svg>Sync from Meta</button>
+              </div>
             </div>
             <table class="table" id="stats-table">
               <thead><tr><th>Country</th><th class="num">Spend</th><th class="num">Impressions</th><th class="num">Clicks</th><th class="num">Purchases</th><th class="num">CPM</th><th class="num">CTR</th><th class="num">CVR</th><th>Confidence</th></tr></thead>
@@ -590,6 +593,6 @@
   </dialog>
 
   <div id="toast" role="status" hidden></div>
-  <script src="/static/app.js?v=22"></script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

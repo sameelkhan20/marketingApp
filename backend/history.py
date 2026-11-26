@@ -6,19 +6,20 @@ only CPM and CTR are trusted; CVR stays on the benchmark (blended).
 """
 
 from .benchmarks import get_country, get_niche, price_multiplier
-from .db import AccountStat, get_session
+from .db import get_session, stat_for
 
 
-# The synced history comes from the main store's ad account, which sells jackets. It only stands in for
-# benchmarks for plans of that store in those categories; other stores and categories use benchmarks.
+# Categories whose calibration keeps the plain country key (see outcomes.cal_key): the main store sold
+# jackets before categories existed, and their learned corrections carry on under that key.
 HISTORY_NICHES = {"leather_jackets", "celebrity_jackets"}
 
 
 def account_overrides(country: str, niche: str, price_usd: float = 120.0, brand_id: int = 0) -> dict | None:
-    if brand_id or (niche or "").lower() not in HISTORY_NICHES:
-        return None
+    """Each store's plans launch on that store's own ad account, so that account's synced history replaces
+    the benchmarks for the store's plans, whatever the category. A store that has not synced yet (or has
+    too little data in this country) uses benchmarks."""
     with get_session() as s:
-        st = s.get(AccountStat, country.upper())
+        st = stat_for(s, int(brand_id or 0), country)
         if not st or st.impressions < 10_000:
             return None
 

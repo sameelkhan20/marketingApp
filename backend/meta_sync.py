@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from . import fx
-from .db import AccountStat
+from .db import AccountStat, StoreStat
 from .meta_client import MetaClient, MetaError
 from .settings_store import ad_account_path
 
@@ -71,7 +71,9 @@ def aggregate(rows: list[dict], currency: str, today: date | None = None) -> dic
     return out
 
 
-def sync_account(session: Session, token: str, account_id: str, years: int = 2) -> dict:
+def sync_account(session: Session, token: str, account_id: str, years: int = 2, brand_id: int = 0) -> dict:
+    """Two years of this ad account's results per country, saved for one store (0 = the main store).
+    Only that store's rows are replaced; every other store's history stays as it was."""
     client = MetaClient(token)
     act = ad_account_path(account_id)
     info = client.account(act)
@@ -85,9 +87,14 @@ def sync_account(session: Session, token: str, account_id: str, years: int = 2) 
     rows = client.insights_by_country(act, since.isoformat(), until.isoformat())
     stats = aggregate(rows, currency)
 
-    session.query(AccountStat).delete()
-    for c, s in stats.items():
-        session.add(AccountStat(country=c, since=since.isoformat(), until=until.isoformat(), **s))
+    if brand_id:
+        session.query(StoreStat).filter(StoreStat.brand_id == int(brand_id)).delete()
+        for c, s in stats.items():
+            session.add(StoreStat(brand_id=int(brand_id), country=c, since=since.isoformat(), until=until.isoformat(), **s))
+    else:
+        session.query(AccountStat).delete()
+        for c, s in stats.items():
+            session.add(AccountStat(country=c, since=since.isoformat(), until=until.isoformat(), **s))
     session.commit()
 
     return {"account": info, "currency": currency, "rows": len(rows), "countries": len(stats),

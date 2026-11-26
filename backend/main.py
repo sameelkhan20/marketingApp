@@ -50,7 +50,7 @@ OWNER_ROUTES = {
     ("GET", "/api/backups"), ("POST", "/api/backups"), ("GET", "/api/backups/{name}"),
     ("GET", "/api/brands/{brand_id}"), ("POST", "/api/brands"), ("POST", "/api/brands/{brand_id}"),
     ("DELETE", "/api/brands/{brand_id}"), ("POST", "/api/brands/{brand_id}/check"),
-    ("POST", "/api/brands/{brand_id}/winners"),
+    ("POST", "/api/brands/{brand_id}/winners"), ("POST", "/api/brands/{brand_id}/sync"),
 }
 
 
@@ -145,6 +145,7 @@ ACTIVITY_ROUTES = [
     ("POST", r"/api/meta/settings", "settings", "meta_saved", "Meta settings saved"),
     ("POST", r"/api/meta/sync", "settings", "meta_synced", "Meta history synced"),
     ("POST", r"/api/brands/(\d+)/winners", "settings", "winners_synced", "Best ads synced for store #{0}"),
+    ("POST", r"/api/brands/(\d+)/sync", "settings", "store_synced", "History and best ads synced for store #{0}"),
     ("POST", r"/api/brands", "settings", "store_added", "Store added"),
     ("POST", r"/api/brands/(\d+)", "settings", "store_saved", "Store #{0} saved"),
     ("DELETE", r"/api/brands/(\d+)", "settings", "store_deleted", "Store #{0} deleted"),
@@ -571,6 +572,9 @@ def delete_brand(brand_id: int):
             brands.delete(s, brand_id)
         except brands.BrandError as ex:
             raise HTTPException(400, str(ex))
+        from .db import StoreStat
+        s.query(StoreStat).filter(StoreStat.brand_id == brand_id).delete()
+        s.commit()
         return {"ok": True}
 
 
@@ -586,6 +590,30 @@ def sync_brand_winners(brand_id: int):
             raise HTTPException(404, str(ex))
         except MetaError as ex:
             raise HTTPException(400, str(ex))
+
+
+@app.post("/api/brands/{brand_id}/sync")
+def sync_brand(brand_id: int):
+    """Two years of this store's own ad account: results per country (for its estimates) and its best ads."""
+    from . import brands
+    from .meta_sync import sync_winners
+    with get_session() as s:
+        try:
+            vals = brands.settings_for(s, brand_id)
+        except brands.BrandError as ex:
+            raise HTTPException(404, str(ex))
+        if not vals["meta_access_token"] or not vals["meta_ad_account_id"]:
+            raise HTTPException(400, "Save this store's token and ad account first")
+        try:
+            result = sync_account(s, vals["meta_access_token"], vals["meta_ad_account_id"], brand_id=brand_id)
+        except MetaError as ex:
+            raise HTTPException(400, str(ex))
+        try:
+            result["winners"] = sync_winners(s, brand_id)["winners"]
+        except Exception as ex:  # the history itself synced; the best-ads list can come next time
+            result["winners_error"] = str(ex)
+        result.pop("account", None)
+    return result
 
 
 @app.get("/api/brands/{brand_id}/winners")
@@ -713,9 +741,10 @@ def meta_sync():
 
 
 @app.get("/api/meta/stats")
-def meta_stats():
+def meta_stats(brand_id: int = 0):
+    from .db import stat_rows
     with get_session() as s:
-        rows = s.scalars(select(AccountStat).order_by(AccountStat.spend_usd.desc())).all()
+        rows = stat_rows(s, brand_id)
         return [
             {"country": r.country, "name": COUNTRY_BENCHMARKS.get(r.country, {}).get("name", r.country),
              "spend_usd": r.spend_usd, "impressions": r.impressions, "clicks": r.clicks,

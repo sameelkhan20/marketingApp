@@ -37,7 +37,7 @@ def test_history_only_for_the_synced_store_and_its_categories():
                             clicks=9000, purchases=120, revenue_usd=18000, cpm_usd=10, ctr=0.01, cvr=0.013, confidence="high"))
         s.commit()
     assert account_overrides("US", "leather_jackets", 150, 0) is not None
-    assert account_overrides("US", "kitchen_cutlery", 60, 0) is None      # jacket history says nothing about cutlery
+    assert account_overrides("US", "other", 60, 0) is not None            # the main store's own account, any product
     assert account_overrides("US", "leather_jackets", 150, 3) is None     # nor about another store
     with get_session() as s:
         s.query(AccountStat).filter(AccountStat.country == "US").delete(); s.commit()
